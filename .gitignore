@@ -157,3 +157,4 @@ output/
 cache/
 *.log
 checkpoints/
+input/

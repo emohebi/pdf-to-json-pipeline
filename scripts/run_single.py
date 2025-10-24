@@ -19,12 +19,12 @@ def main():
     parser = argparse.ArgumentParser(
         description='Process a single PDF document to JSON'
     )
-    parser.add_argument(
-        '--pdf',
-        type=str,
-        required=True,
-        help='Path to PDF file'
-    )
+    # parser.add_argument(
+    #     '--pdf',
+    #     type=str,
+    #     required=True,
+    #     help='Path to PDF file'
+    # )
     parser.add_argument(
         '--output-dir',
         type=str,
@@ -32,7 +32,7 @@ def main():
     )
     
     args = parser.parse_args()
-    
+    args.pdf = "./input/0008496.pdf"
     # Validate PDF exists
     pdf_path = Path(args.pdf)
     if not pdf_path.exists():

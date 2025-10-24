@@ -48,19 +48,19 @@ class PDFToJSONPipeline:
             # STAGE 1: Extract PDF to images
             logger.info("STAGE 1: Extracting PDF pages...")
             pages_data = self.pdf_processor.pdf_to_images(str(pdf_path))
-            logger.info(f"✓ Extracted {len(pages_data)} pages")
+            logger.info(f"Extracted {len(pages_data)} pages")
             
             # STAGE 2: Detect sections
             logger.info("STAGE 2: Detecting sections...")
             sections = self.section_detector.detect_sections(pages_data, document_id)
-            logger.info(f"✓ Detected {len(sections)} sections")
+            logger.info(f"Detected {len(sections)} sections")
             
             # STAGE 3: Extract each section in parallel
             logger.info("STAGE 3: Extracting sections...")
             section_jsons = self._extract_sections_parallel(
                 pages_data, sections, document_id
             )
-            logger.info(f"✓ Extracted {len(section_jsons)} sections")
+            logger.info(f"Extracted {len(section_jsons)} sections")
             
             # STAGE 4: Validate and combine
             logger.info("STAGE 4: Validating and combining...")
@@ -79,13 +79,13 @@ class PDFToJSONPipeline:
                 section_jsons, document_metadata, document_id
             )
             
-            logger.info(f"✓ Processing complete ({duration:.1f}s)")
+            logger.info(f"Processing complete ({duration:.1f}s)")
             logger.info(f"=" * 60)
             
             return final_json
             
         except Exception as e:
-            logger.error(f"✗ Processing failed for {document_id}: {e}")
+            logger.error(f"Processing failed for {document_id}: {e}")
             raise
     
     def _extract_sections_parallel(

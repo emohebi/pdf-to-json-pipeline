@@ -28,12 +28,15 @@ for directory in [DETECTION_DIR, SECTIONS_DIR, VALIDATION_QUEUE_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
 # AWS Configuration
-AWS_REGION = os.getenv('AWS_REGION', 'us-east-1')
+AWS_REGION = os.getenv('AWS_REGION', "ap-southeast-2")
 BEDROCK_MODEL_ID = os.getenv(
     'BEDROCK_MODEL_ID',
     'anthropic.claude-3-5-sonnet-20241022-v2:0'
 )
 BEDROCK_MODEL_REGION = os.getenv('BEDROCK_MODEL_REGION', 'us-east-1')
+BEDROCK_NAMESPACE: str = "swscraping"
+MODEL_ID_37: str = "apac.anthropic.claude-3-7-sonnet-20250219-v1:0"
+MODEL_ID_40: str = "apac.anthropic.claude-sonnet-4-20250514-v1:0"
 
 # Processing Configuration
 MAX_WORKERS = int(os.getenv('MAX_WORKERS', '5'))

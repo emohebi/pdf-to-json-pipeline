@@ -7,7 +7,7 @@ from typing import List, Dict
 from strands import Agent
 
 from config.schemas import SECTION_DEFINITIONS
-from config.settings import MODEL_MAX_TOKENS_DETECTION
+from config.settings import MODEL_MAX_TOKENS_DETECTION, MODEL_ID_37
 from src.tools import invoke_bedrock_multimodal, prepare_images_for_bedrock
 from src.utils import setup_logger, StorageManager
 
@@ -26,38 +26,38 @@ class SectionDetectionAgent:
         self.agent = Agent(
             system_prompt=self._build_system_prompt(),
             tools=[invoke_bedrock_multimodal],
-            model_id="us.anthropic.claude-sonnet-4-20250514-v1:0"
+            model=MODEL_ID_37
         )
     
     def _build_system_prompt(self) -> str:
         """Build system prompt for section detection."""
         return f"""You are an expert document analyzer specializing in 
-identifying logical sections in documents.
+                identifying logical sections in documents.
 
-Expected section types:
-{json.dumps(self.section_definitions, indent=2)}
+                Expected section types:
+                {json.dumps(self.section_definitions, indent=2)}
 
-Your task is to:
-1. Analyze document pages (samples will be provided)
-2. Identify where each section begins and ends
-3. Classify each section by type
-4. Return a structured JSON array of sections
+                Your task is to:
+                1. Analyze document pages (samples will be provided)
+                2. Identify where each section begins and ends
+                3. Classify each section by type
+                4. Return a structured JSON array of sections
 
-Guidelines:
-- Be precise with page boundaries
-- Pay attention to:
-  * Headings and titles
-  * Visual separators (lines, spacing)
-  * Content changes
-  * Layout shifts
-  * Font size and style changes
-- If unsure about section type, use 'general'
-- Sections should not overlap
-- All pages must be covered by sections
+                Guidelines:
+                - Be precise with page boundaries
+                - Pay attention to:
+                * Headings and titles
+                * Visual separators (lines, spacing)
+                * Content changes
+                * Layout shifts
+                * Font size and style changes
+                - If unsure about section type, use 'general'
+                - Sections should not overlap
+                - All pages must be covered by sections
 
-Output format:
-Return ONLY a JSON array, no additional text or markdown.
-"""
+                Output format:
+                Return ONLY a JSON array, no additional text or markdown.
+                """
     
     def detect_sections(
         self, 
@@ -160,30 +160,30 @@ Return ONLY a JSON array, no additional text or markdown.
         
         return f"""Analyze these document pages and identify logical sections.
 
-Total pages in document: {len(all_pages)}
-Sample pages shown: {sample_page_numbers}
+            Total pages in document: {len(all_pages)}
+            Sample pages shown: {sample_page_numbers}
 
-Based on these samples, infer the complete section structure.
+            Based on these samples, infer the complete section structure.
+            """+"""
+            Return ONLY a JSON array with this exact structure:
+            [
+                {
+                    "section_type": "one of: """+f"""{', '.join(self.section_definitions.keys())}"""+""",
+                    "section_name": "descriptive name",
+                    "start_page": number (1-indexed),
+                    "end_page": number (1-indexed),
+                    "description": "brief description",
+                    "confidence": number (0.0-1.0)
+                }
+            ]
+            """ + f"""
+            Requirements:
+            - Sections must not overlap
+            - All pages (1 to {len(all_pages)}) must be covered
+            - Use proper section types
+            - Be precise with page numbers
 
-Return ONLY a JSON array with this exact structure:
-[
-    {{
-        "section_type": "one of: {', '.join(self.section_definitions.keys())}",
-        "section_name": "descriptive name",
-        "start_page": number (1-indexed),
-        "end_page": number (1-indexed),
-        "description": "brief description",
-        "confidence": number (0.0-1.0)
-    }}
-]
-
-Requirements:
-- Sections must not overlap
-- All pages (1 to {len(all_pages)}) must be covered
-- Use proper section types
-- Be precise with page numbers
-
-Return the JSON array now, no other text:
+            Return the JSON array now, no other text:
 """
     
     def _parse_detection_response(self, response: str) -> List[Dict]:

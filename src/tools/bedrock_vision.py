@@ -7,10 +7,13 @@ import base64
 import time
 from typing import List, Dict, Any
 from strands import tool
+import boto3
+from botocore.config import Config as boto_Config
+from botocore.exceptions import ClientError
 
 from config.settings import (
-    BEDROCK_MODEL_ID, BEDROCK_MODEL_REGION,
-    MODEL_TEMPERATURE, MAX_RETRIES, RETRY_DELAY
+    BEDROCK_MODEL_ID, BEDROCK_MODEL_REGION, AWS_REGION,
+    MODEL_TEMPERATURE, MAX_RETRIES, RETRY_DELAY, BEDROCK_NAMESPACE, MODEL_ID_37
 )
 from src.utils.logger import setup_logger
 
@@ -22,11 +25,64 @@ class BedrockClient:
     
     def __init__(self):
         """Initialize Bedrock runtime client."""
-        self.client = boto3.client(
-            'bedrock-runtime',
-            region_name=BEDROCK_MODEL_REGION
+        self.namespace = BEDROCK_NAMESPACE
+        self.aws_region = AWS_REGION
+        self.client = self._create_client(True, True)
+        self.model_id = MODEL_ID_37
+    
+    def _create_client(self, consumer_bool: bool = True, runtime_client: bool = True):
+        """
+        Create and configure Bedrock client with role assumption
+        Maintains exact same credential setup as original
+        
+        Args:
+            consumer_bool: Whether to use consumer or developer role
+            runtime_client: Whether to create runtime or regular client
+        
+        Returns:
+            Configured boto3 client
+        """
+        # Assume role using STS
+        sts_client = boto3.client("sts")
+        
+        role_type = "bedrock-consumer" if consumer_bool else "bedrock-developer"
+        role_arn = f"arn:aws:iam::533267133246:role/{self.namespace}-{role_type}"
+        
+        try:
+            bedrock_account = sts_client.assume_role(
+                RoleArn=role_arn,
+                RoleSessionName=role_type,
+            )
+        except ClientError as e:
+            logger.error(f"Failed to assume role {role_arn}: {e}")
+            raise
+        
+        # Extract credentials
+        credentials = bedrock_account["Credentials"]
+        
+        # Configure retry and timeout settings
+        config = boto_Config(
+            retries={"total_max_attempts": 20, "mode": "standard"},
+            read_timeout=1000
         )
-        self.model_id = BEDROCK_MODEL_ID
+        
+        # Determine service and endpoint
+        service_name = "bedrock-runtime" if runtime_client else "bedrock"
+        endpoint = f"https://{service_name}.ap-southeast-2.amazonaws.com"
+        
+        # Create client with assumed role credentials
+        client = boto3.client(
+            service_name=service_name,
+            region_name=self.aws_region,
+            aws_access_key_id=credentials["AccessKeyId"],
+            aws_secret_access_key=credentials["SecretAccessKey"],
+            aws_session_token=credentials["SessionToken"],
+            config=config,
+            endpoint_url=endpoint,
+        )
+        
+        logger.info(f"Created {service_name} client with {role_type} role")
+        return client
     
     def invoke_with_retry(
         self,
