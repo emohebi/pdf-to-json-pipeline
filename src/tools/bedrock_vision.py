@@ -1,5 +1,5 @@
 """
-AWS Bedrock tools for vision and text processing.
+AWS Bedrock tools for vision and text processing - FIXED VERSION.
 """
 import boto3
 import json
@@ -106,9 +106,53 @@ class BedrockClient:
                     body=json.dumps(request_body)
                 )
                 
-                result = json.loads(response['body'].read())
+                # FIX: Properly handle the streaming response body
+                response_body = response.get('body')
+                
+                if response_body is None:
+                    raise ValueError("Response body is None")
+                
+                # Read the entire response body
+                try:
+                    # Method 1: Direct read
+                    body_bytes = response_body.read()
+                except Exception as read_error:
+                    logger.warning(f"Direct read failed: {read_error}, trying chunked read")
+                    # Method 2: Chunked read if direct read fails
+                    chunks = []
+                    while True:
+                        try:
+                            chunk = response_body.read(8192)
+                            if not chunk:
+                                break
+                            chunks.append(chunk)
+                        except Exception as chunk_error:
+                            logger.error(f"Chunk read failed: {chunk_error}")
+                            break
+                    body_bytes = b''.join(chunks)
+                
+                if not body_bytes:
+                    raise ValueError("Response body is empty")
+                
+                # Decode bytes to string
+                if isinstance(body_bytes, bytes):
+                    body_str = body_bytes.decode('utf-8')
+                else:
+                    body_str = str(body_bytes)
+                
+                # Parse JSON
+                result = json.loads(body_str)
+                
+                logger.debug(f"Successfully invoked model on attempt {attempt + 1}")
                 return result
                 
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON parsing error on attempt {attempt + 1}: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(RETRY_DELAY * (attempt + 1))
+                else:
+                    raise
+                    
             except Exception as e:
                 logger.warning(
                     f"Bedrock invocation attempt {attempt + 1} failed: {e}"

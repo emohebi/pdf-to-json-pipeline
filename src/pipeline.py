@@ -25,12 +25,13 @@ class PDFToJSONPipeline:
         self.validator = ValidationAgent()
         self.storage = StorageManager()
     
-    def process_single_pdf(self, pdf_path: str) -> Dict:
+    def process_single_pdf(self, pdf_path: str, parallel: bool = False) -> Dict:
         """
         Process a single PDF document.
         
         Args:
             pdf_path: Path to PDF file
+            parallel: If True, use parallel extraction. If False, use sequential.
         
         Returns:
             Final document JSON
@@ -42,6 +43,7 @@ class PDFToJSONPipeline:
         logger.info(f"=" * 60)
         logger.info(f"Processing: {pdf_path.name}")
         logger.info(f"Document ID: {document_id}")
+        logger.info(f"Mode: {'Parallel' if parallel else 'Sequential'}")
         logger.info(f"=" * 60)
         
         try:
@@ -55,11 +57,18 @@ class PDFToJSONPipeline:
             sections = self.section_detector.detect_sections(pages_data, document_id)
             logger.info(f"Detected {len(sections)} sections")
             
-            # STAGE 3: Extract each section in parallel
-            logger.info("STAGE 3: Extracting sections...")
-            section_jsons = self._extract_sections_parallel(
-                pages_data, sections, document_id
-            )
+            # STAGE 3: Extract each section (parallel or sequential)
+            if parallel:
+                logger.info("STAGE 3: Extracting sections (PARALLEL)...")
+                section_jsons = self._extract_sections_parallel(
+                    pages_data, sections, document_id
+                )
+            else:
+                logger.info("STAGE 3: Extracting sections (SEQUENTIAL)...")
+                section_jsons = self._extract_sections_non_parallel(
+                    pages_data, sections, document_id
+                )
+            
             logger.info(f"Extracted {len(section_jsons)} sections")
             
             # STAGE 4: Validate and combine
@@ -72,7 +81,8 @@ class PDFToJSONPipeline:
                 'total_pages': len(pages_data),
                 'processing_timestamp': datetime.now().isoformat(),
                 'processing_duration': duration,
-                'model_used': 'claude-sonnet-4'
+                'model_used': 'claude-sonnet-4',
+                'extraction_mode': 'parallel' if parallel else 'sequential'
             }
             
             final_json = self.validator.validate_and_combine(
@@ -132,10 +142,59 @@ class PDFToJSONPipeline:
         
         return section_jsons
     
+    def _extract_sections_non_parallel(
+        self,
+        pages_data: List[Dict],
+        sections: List[Dict],
+        document_id: str
+    ) -> List[Dict]:
+        """Extract sections sequentially (non-parallel)."""
+        section_jsons = []
+        
+        for idx, section in enumerate(sections, 1):
+            section_name = section['section_name']
+            
+            try:
+                logger.info(f"  [{idx}/{len(sections)}] Extracting: {section_name}")
+                
+                # Get pages for this section
+                start_idx = section['start_page'] - 1
+                end_idx = section['end_page']
+                section_pages = pages_data[start_idx:end_idx]
+                
+                # Get schema for this section type
+                section_schema = get_section_schema(section['section_type'])
+                
+                # Create extractor
+                extractor = SectionExtractionAgent(section_schema)
+                
+                # Extract section
+                section_json = extractor.extract_section(
+                    section_pages,
+                    section,
+                    document_id
+                )
+                
+                section_jsons.append(section_json)
+                
+                # Log confidence if available
+                if '_metadata' in section_json:
+                    confidence = section_json['_metadata'].get('confidence', 0)
+                    logger.info(f"  [{idx}/{len(sections)}] Completed: {section_name} (confidence: {confidence:.2f})")
+                else:
+                    logger.info(f"  [{idx}/{len(sections)}] Completed: {section_name}")
+                
+            except Exception as e:
+                logger.error(f"Failed to extract {section_name}: {e}")
+                # Continue with next section
+        
+        return section_jsons
+    
     def process_batch(
         self,
         pdf_paths: List[str],
-        resume: bool = False
+        resume: bool = False,
+        parallel: bool = True
     ) -> Dict:
         """
         Process batch of PDFs.
@@ -143,6 +202,7 @@ class PDFToJSONPipeline:
         Args:
             pdf_paths: List of PDF paths
             resume: Resume from previous progress
+            parallel: Use parallel section extraction
         
         Returns:
             Batch processing results
@@ -176,7 +236,7 @@ class PDFToJSONPipeline:
             logger.info(f"\n[{i+1}/{len(remaining)}] Processing {document_id}")
             
             try:
-                self.process_single_pdf(pdf_path)
+                self.process_single_pdf(pdf_path, parallel=parallel)
                 completed.add(document_id)
                 results['completed'].append(document_id)
                 

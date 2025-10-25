@@ -4,13 +4,15 @@ Configuration settings for PDF to JSON pipeline.
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+from datetime import datetime
 
 # Load environment variables
 load_dotenv()
 
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 # Base directories
 BASE_DIR = Path(__file__).resolve().parent.parent
-OUTPUT_DIR = Path(os.getenv('OUTPUT_DIR', 'output'))
+OUTPUT_DIR = Path(os.getenv('OUTPUT_DIR', 'output')) / f"{timestamp}"
 INTERMEDIATE_DIR = OUTPUT_DIR / 'intermediate'
 FINAL_DIR = OUTPUT_DIR / 'final'
 LOGS_DIR = OUTPUT_DIR / 'logs'

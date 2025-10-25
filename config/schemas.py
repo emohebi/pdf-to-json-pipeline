@@ -1,6 +1,6 @@
 """
 Document and section schemas definition.
-Customize these schemas based on your document structure.
+Customized for safety procedure documents.
 """
 from typing import Dict, Any
 
@@ -9,17 +9,16 @@ from typing import Dict, Any
 # ============================================================================
 
 SECTION_DEFINITIONS = {
-    'header': 'Title page, document information, metadata, cover page',
-    'summary': 'Executive summary, abstract, or overview',
-    'introduction': 'Introduction, background, or context section',
-    'body': 'Main content sections, detailed information',
-    'tables': 'Data tables, statistical information, tabular data',
-    'figures': 'Charts, graphs, diagrams, images with captions',
-    'results': 'Results, findings, outcomes section',
-    'discussion': 'Discussion, analysis, interpretation section',
-    'conclusion': 'Conclusion, summary of findings',
-    'appendix': 'Supplementary information, additional data',
-    'references': 'Citations, bibliography, references',
+    'safety': 'Safety information section including icons, statements, and additional safety notes',
+    'material_risks_and_controls': 'Material risks and their associated critical controls',
+    'task_activities': 'Task activities with sequences, steps, descriptions, photos/diagrams, and notes',
+    'additional_controls_required': 'Additional controls required with control types and reasons',
+    'additional_ppe_required': 'Additional personal protective equipment (PPE) required',
+    'specific_competencies_knowledge_and_skills': 'Specific competencies, knowledge and skills required',
+    'tooling_equipment_required': 'Tooling and equipment required including tool sets',
+    'reference_documentation': 'Reference documentation with document numbers and descriptions',
+    'reference_drawings': 'Reference drawings including mechanical and structural/civil drawings',
+    'attached_images': 'Attached images and diagrams',
     'general': 'General content section (fallback)'
 }
 
@@ -29,260 +28,319 @@ SECTION_DEFINITIONS = {
 # ============================================================================
 
 SECTION_SCHEMAS: Dict[str, Dict[str, Any]] = {
-    'header': {
+    'safety': {
         'type': 'object',
         'properties': {
-            'title': {
-                'type': 'string',
-                'description': 'Document title'
-            },
-            'subtitle': {
-                'type': 'string',
-                'description': 'Document subtitle if present'
-            },
-            'author': {
-                'type': ['string', 'array'],
-                'description': 'Author name(s)'
-            },
-            'date': {
-                'type': 'string',
-                'description': 'Document date'
-            },
-            'document_number': {
-                'type': 'string',
-                'description': 'Document ID or reference number'
-            },
-            'organization': {
-                'type': 'string',
-                'description': 'Organization or company name'
-            },
-            'version': {
-                'type': 'string',
-                'description': 'Document version'
-            }
-        },
-        'required': ['title']
-    },
-    
-    'summary': {
-        'type': 'object',
-        'properties': {
-            'text': {
-                'type': 'string',
-                'description': 'Full summary text'
-            },
-            'key_points': {
-                'type': 'array',
-                'items': {'type': 'string'},
-                'description': 'List of key points or highlights'
-            },
-            'word_count': {
-                'type': 'integer',
-                'description': 'Approximate word count'
-            }
-        },
-        'required': ['text']
-    },
-    
-    'introduction': {
-        'type': 'object',
-        'properties': {
-            'paragraphs': {
-                'type': 'array',
-                'items': {'type': 'string'},
-                'description': 'Introduction paragraphs'
-            },
-            'objectives': {
-                'type': 'array',
-                'items': {'type': 'string'},
-                'description': 'Document objectives if stated'
-            },
-            'scope': {
-                'type': 'string',
-                'description': 'Scope of the document'
-            }
-        },
-        'required': ['paragraphs']
-    },
-    
-    'body': {
-        'type': 'object',
-        'properties': {
-            'subsections': {
-                'type': 'array',
-                'items': {
-                    'type': 'object',
-                    'properties': {
-                        'heading': {'type': 'string'},
-                        'content': {'type': 'string'},
-                        'level': {'type': 'integer'}
-                    }
+            'safety_icon': {
+                'type': 'object',
+                'properties': {
+                    'text': {'type': 'string', 'description': 'Text content from safety icon'},
+                    'image': {'type': 'string', 'description': 'Base64 image or description of safety icon'}
                 },
-                'description': 'Main content organized by subsections'
+                'required': ['text', 'image']
             },
-            'paragraphs': {
-                'type': 'array',
-                'items': {'type': 'string'},
-                'description': 'Content paragraphs'
-            },
-            'images_text': {
-                'type': 'array',
-                'items': {'type': 'string'},
-                'description': 'Text extracted from images in this section'
-            },
-            'bullet_points': {
-                'type': 'array',
-                'items': {'type': 'string'},
-                'description': 'Bullet points or lists'
-            }
-        },
-        'required': ['paragraphs']
-    },
-    
-    'tables': {
-        'type': 'object',
-        'properties': {
-            'tables': {
+            'safety_statement': {
                 'type': 'array',
                 'items': {
                     'type': 'object',
                     'properties': {
-                        'title': {'type': 'string'},
-                        'headers': {
-                            'type': 'array',
-                            'items': {'type': 'string'}
+                        'text': {'type': 'string', 'description': 'Safety statement text'},
+                        'image': {'type': 'string', 'description': 'Associated image or icon'}
+                    },
+                    'required': ['text', 'image']
+                },
+                'description': 'List of safety statements'
+            },
+            'safety_additional': {
+                'type': 'array',
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'seq': {'type': 'string', 'description': 'Sequence number'},
+                        'text': {'type': 'string', 'description': 'Additional safety note text'}
+                    },
+                    'required': ['seq', 'text']
+                },
+                'description': 'Additional safety notes'
+            }
+        },
+        'required': ['safety_icon', 'safety_statement', 'safety_additional']
+    },
+    
+    'material_risks_and_controls': {
+        'type': 'array',
+        'items': {
+            'type': 'object',
+            'properties': {
+                'risk': {
+                    'type': 'object',
+                    'properties': {
+                        'text': {'type': 'string', 'description': 'Risk name or title'},
+                        'image': {'type': 'string', 'description': 'Risk icon or image'}
+                    },
+                    'required': ['text', 'image']
+                },
+                'risk_description': {
+                    'type': 'object',
+                    'properties': {
+                        'text': {'type': 'string', 'description': 'Detailed risk description'},
+                        'image': {'type': 'string', 'description': 'Risk diagram or image'}
+                    },
+                    'required': ['text', 'image']
+                },
+                'critical_controls': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'object',
+                        'properties': {
+                            'text': {'type': 'string', 'description': 'Control measure text'},
+                            'image': {'type': 'string', 'description': 'Control measure icon or image'}
                         },
-                        'rows': {
-                            'type': 'array',
-                            'items': {
-                                'type': 'array',
-                                'items': {'type': 'string'}
-                            }
+                        'required': ['text', 'image']
+                    },
+                    'description': 'List of critical controls for this risk'
+                }
+            },
+            'required': ['risk', 'risk_description', 'critical_controls']
+        },
+        'description': 'Array of material risks and their controls'
+    },
+    
+    'task_activities': {
+        'type': 'array',
+        'items': {
+            'type': 'object',
+            'properties': {
+                'sequence_no': {
+                    'type': 'object',
+                    'properties': {
+                        'text': {'type': 'string', 'description': 'Sequence number'}
+                    },
+                    'required': ['text']
+                },
+                'sequence_name': {
+                    'type': 'object',
+                    'properties': {
+                        'text': {'type': 'string', 'description': 'Sequence name or title'}
+                    },
+                    'required': ['text']
+                },
+                'step_no': {
+                    'type': 'object',
+                    'properties': {
+                        'text': {'type': 'string', 'description': 'Step number'},
+                        'image': {'type': 'string', 'description': 'Step number badge or icon'}
+                    },
+                    'required': ['text', 'image']
+                },
+                'step_description': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'object',
+                        'properties': {
+                            'text': {'type': 'string', 'description': 'Step description text'},
+                            'image': {'type': 'string', 'description': 'Step image or diagram'}
                         },
-                        'caption': {'type': 'string'},
-                        'table_number': {'type': 'string'}
-                    }
+                        'required': ['text', 'image']
+                    },
+                    'description': 'Step descriptions'
                 },
-                'description': 'Structured table data'
-            }
-        },
-        'required': ['tables']
-    },
-    
-    'figures': {
-        'type': 'object',
-        'properties': {
-            'figures': {
-                'type': 'array',
-                'items': {
+                'photo_diagram': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'object',
+                        'properties': {
+                            'text': {'type': 'string', 'description': 'Photo/diagram caption'},
+                            'image': {'type': 'string', 'description': 'Photo or diagram image'}
+                        },
+                        'required': ['text', 'image']
+                    },
+                    'description': 'Photos or diagrams for this step'
+                },
+                'notes': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'object',
+                        'properties': {
+                            'text': {'type': 'string', 'description': 'Note text'},
+                            'image': {'type': 'string', 'description': 'Note icon or image'}
+                        },
+                        'required': ['text', 'image']
+                    },
+                    'description': 'Additional notes for this step'
+                },
+                'execution_condition': {
                     'type': 'object',
                     'properties': {
-                        'figure_number': {'type': 'string'},
-                        'title': {'type': 'string'},
-                        'caption': {'type': 'string'},
-                        'description': {'type': 'string'},
-                        'text_in_image': {
-                            'type': 'array',
-                            'items': {'type': 'string'},
-                            'description': 'Text extracted from the figure'
-                        }
-                    }
-                },
-                'description': 'Figures, charts, and diagrams'
-            }
+                        'text': {'type': 'string', 'description': 'Execution condition or prerequisite'}
+                    },
+                    'required': ['text']
+                }
+            },
+            'required': ['sequence_no', 'sequence_name', 'step_no', 'step_description', 'photo_diagram', 'notes', 'execution_condition']
         },
-        'required': ['figures']
+        'description': 'Array of task activities'
     },
     
-    'results': {
-        'type': 'object',
-        'properties': {
-            'findings': {
-                'type': 'array',
-                'items': {'type': 'string'},
-                'description': 'Key findings'
-            },
-            'data': {
-                'type': 'array',
-                'items': {'type': 'object'},
-                'description': 'Result data points'
-            },
-            'text': {
-                'type': 'string',
-                'description': 'Full results text'
-            }
-        },
-        'required': ['text']
-    },
-    
-    'discussion': {
-        'type': 'object',
-        'properties': {
-            'paragraphs': {
-                'type': 'array',
-                'items': {'type': 'string'},
-                'description': 'Discussion paragraphs'
-            },
-            'implications': {
-                'type': 'array',
-                'items': {'type': 'string'},
-                'description': 'Implications mentioned'
-            }
-        },
-        'required': ['paragraphs']
-    },
-    
-    'conclusion': {
-        'type': 'object',
-        'properties': {
-            'summary': {
-                'type': 'string',
-                'description': 'Conclusion summary'
-            },
-            'recommendations': {
-                'type': 'array',
-                'items': {'type': 'string'},
-                'description': 'Recommendations if any'
-            },
-            'future_work': {
-                'type': 'string',
-                'description': 'Future work section if present'
-            }
-        },
-        'required': ['summary']
-    },
-    
-    'appendix': {
-        'type': 'object',
-        'properties': {
-            'sections': {
-                'type': 'array',
-                'items': {
+    'additional_controls_required': {
+        'type': 'array',
+        'items': {
+            'type': 'object',
+            'properties': {
+                'control_type': {
                     'type': 'object',
                     'properties': {
-                        'title': {'type': 'string'},
-                        'content': {'type': 'string'}
-                    }
+                        'text': {'type': 'string', 'description': 'Type of control'},
+                        'image': {'type': 'string', 'description': 'Control type icon'}
+                    },
+                    'required': ['text', 'image']
                 },
-                'description': 'Appendix sections'
-            }
-        }
+                'reason_for_control': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'object',
+                        'properties': {
+                            'text': {'type': 'string', 'description': 'Reason text'},
+                            'image': {'type': 'string', 'description': 'Reason icon or diagram'}
+                        },
+                        'required': ['text', 'image']
+                    },
+                    'description': 'Reasons for this control'
+                }
+            },
+            'required': ['control_type', 'reason_for_control']
+        },
+        'description': 'Array of additional controls'
     },
     
-    'references': {
-        'type': 'object',
-        'properties': {
-            'references': {
-                'type': 'array',
-                'items': {'type': 'string'},
-                'description': 'List of references'
+    'additional_ppe_required': {
+        'type': 'array',
+        'items': {
+            'type': 'object',
+            'properties': {
+                'text': {'type': 'string', 'description': 'PPE item description'},
+                'image': {'type': 'string', 'description': 'PPE item icon or image'}
             },
-            'count': {
-                'type': 'integer',
-                'description': 'Total reference count'
-            }
+            'required': ['text', 'image']
         },
-        'required': ['references']
+        'description': 'Array of required PPE items'
+    },
+    
+    'specific_competencies_knowledge_and_skills': {
+        'type': 'array',
+        'items': {
+            'type': 'object',
+            'properties': {
+                'text': {'type': 'string', 'description': 'Competency, knowledge or skill description'},
+                'image': {'type': 'string', 'description': 'Competency icon or badge'}
+            },
+            'required': ['text', 'image']
+        },
+        'description': 'Array of required competencies, knowledge and skills'
+    },
+    
+    'tooling_equipment_required': {
+        'type': 'array',
+        'items': {
+            'type': 'object',
+            'properties': {
+                'tool_set': {
+                    'type': 'object',
+                    'properties': {
+                        'text': {'type': 'string', 'description': 'Tool set name or category'}
+                    },
+                    'required': ['text']
+                },
+                'tools': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'object',
+                        'properties': {
+                            'text': {'type': 'string', 'description': 'Tool name or description'}
+                        },
+                        'required': ['text']
+                    },
+                    'description': 'List of tools in this set'
+                }
+            },
+            'required': ['tool_set', 'tools']
+        },
+        'description': 'Array of tool sets and their tools'
+    },
+    
+    'reference_documentation': {
+        'type': 'array',
+        'items': {
+            'type': 'object',
+            'properties': {
+                'document_reference_number': {
+                    'type': 'object',
+                    'properties': {
+                        'text': {'type': 'string', 'description': 'Document reference number'},
+                        'image': {'type': 'string', 'description': 'Document icon or badge'}
+                    },
+                    'required': ['text', 'image']
+                },
+                'document_description': {
+                    'type': 'object',
+                    'properties': {
+                        'text': {'type': 'string', 'description': 'Document description or title'},
+                        'image': {'type': 'string', 'description': 'Document thumbnail or icon'}
+                    },
+                    'required': ['text', 'image']
+                }
+            },
+            'required': ['document_reference_number', 'document_description']
+        },
+        'description': 'Array of reference documents'
+    },
+    
+    'reference_drawings': {
+        'type': 'array',
+        'items': {
+            'type': 'object',
+            'properties': {
+                'mechanical_drawings': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'object',
+                        'properties': {
+                            'text': {'type': 'string', 'description': 'Mechanical drawing reference or description'},
+                            'image': {'type': 'string', 'description': 'Mechanical drawing image'}
+                        },
+                        'required': ['text', 'image']
+                    },
+                    'description': 'Mechanical drawings'
+                },
+                'structural_civil_drawings': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'object',
+                        'properties': {
+                            'text': {'type': 'string', 'description': 'Structural/civil drawing reference or description'},
+                            'image': {'type': 'string', 'description': 'Structural/civil drawing image'}
+                        },
+                        'required': ['text', 'image']
+                    },
+                    'description': 'Structural and civil drawings'
+                }
+            },
+            'required': ['mechanical_drawings', 'structural_civil_drawings']
+        },
+        'description': 'Array of reference drawings grouped by type'
+    },
+    
+    'attached_images': {
+        'type': 'array',
+        'items': {
+            'type': 'object',
+            'properties': {
+                'text': {'type': 'string', 'description': 'Image caption or description'},
+                'image': {'type': 'string', 'description': 'Attached image'}
+            },
+            'required': ['text', 'image']
+        },
+        'description': 'Array of attached images'
     },
     
     'general': {
