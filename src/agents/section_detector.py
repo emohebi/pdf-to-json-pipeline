@@ -7,7 +7,7 @@ from typing import List, Dict
 from strands import Agent
 
 from config.schemas import SECTION_DEFINITIONS
-from config.settings import MODEL_MAX_TOKENS_DETECTION, MODEL_ID_37
+from config.settings import MODEL_MAX_TOKENS_DETECTION, MODEL
 from src.tools import invoke_bedrock_multimodal, prepare_images_for_bedrock
 from src.utils import setup_logger, StorageManager
 
@@ -27,7 +27,7 @@ class SectionDetectionAgent:
         self.agent = Agent(
             system_prompt=self._build_system_prompt(),
             tools=[invoke_bedrock_multimodal],
-            model=MODEL_ID_37
+            model=MODEL
         )
     
     def _build_system_prompt(self) -> str:

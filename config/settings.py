@@ -39,6 +39,7 @@ BEDROCK_MODEL_REGION = os.getenv('BEDROCK_MODEL_REGION', 'us-east-1')
 BEDROCK_NAMESPACE: str = "swscraping"
 MODEL_ID_37: str = "apac.anthropic.claude-3-7-sonnet-20250219-v1:0"
 MODEL_ID_40: str = "apac.anthropic.claude-sonnet-4-20250514-v1:0"
+MODEL = MODEL_ID_40
 
 # Processing Configuration
 MAX_WORKERS = int(os.getenv('MAX_WORKERS', '5'))

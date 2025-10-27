@@ -13,7 +13,7 @@ from botocore.exceptions import ClientError
 
 from config.settings import (
     BEDROCK_MODEL_ID, BEDROCK_MODEL_REGION, AWS_REGION,
-    MODEL_TEMPERATURE, MAX_RETRIES, RETRY_DELAY, BEDROCK_NAMESPACE, MODEL_ID_37
+    MODEL_TEMPERATURE, MAX_RETRIES, RETRY_DELAY, BEDROCK_NAMESPACE, MODEL
 )
 from src.utils.logger import setup_logger
 
@@ -28,7 +28,7 @@ class BedrockClient:
         self.namespace = BEDROCK_NAMESPACE
         self.aws_region = AWS_REGION
         self.client = self._create_client(True, True)
-        self.model_id = MODEL_ID_37
+        self.model_id = MODEL
     
     def _create_client(self, consumer_bool: bool = True, runtime_client: bool = True):
         """

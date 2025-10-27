@@ -49,7 +49,7 @@ class PDFToJSONPipeline:
         try:
             # STAGE 1: Extract PDF to images
             logger.info("STAGE 1: Extracting PDF pages...")
-            pages_data = self.pdf_processor.pdf_to_images(str(pdf_path))
+            pages_data = self.pdf_processor.pdf_to_images(str(pdf_path), extract_with_bedrock=True)
             logger.info(f"Extracted {len(pages_data)} pages")
             
             # STAGE 2: Detect sections

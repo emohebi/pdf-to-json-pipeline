@@ -276,11 +276,13 @@ Wrong: {{"text": "High voltage warning", "image": "warning.png"}}
             # For array sections, the data IS the array
             # For object sections, the data IS the object
             result = {
+                'section_name': section_info['section_name'],
+                'page_range': [section_info['start_page'], section_info['end_page']],
                 'data': section_json,  # Can be list or dict
                 '_metadata': {
                     'section_type': section_info['section_type'],
-                    'section_name': section_info['section_name'],
-                    'page_range': [section_info['start_page'], section_info['end_page']],
+                    # 'section_name': section_info['section_name'],
+                    # 'page_range': [section_info['start_page'], section_info['end_page']],
                     'confidence': confidence,
                     'quality_issues': issues
                 }

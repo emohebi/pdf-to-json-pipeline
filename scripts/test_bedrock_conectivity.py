@@ -153,12 +153,12 @@ def check_environment():
     print("="*60)
     
     from config.settings import (
-        AWS_REGION, BEDROCK_MODEL_ID, MODEL_ID_37, 
+        AWS_REGION, BEDROCK_MODEL_ID, MODEL, 
         MAX_RETRIES, RETRY_DELAY
     )
     
     print(f"AWS Region: {AWS_REGION}")
-    print(f"Model ID: {MODEL_ID_37}")
+    print(f"Model ID: {MODEL}")
     print(f"Max Retries: {MAX_RETRIES}")
     print(f"Retry Delay: {RETRY_DELAY}s")
     print(f"Bedrock Client Model: {bedrock_client.model_id}")
