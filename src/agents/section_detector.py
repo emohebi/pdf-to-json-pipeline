@@ -1,6 +1,7 @@
 """
 Stage 1: Section Detection Agent - Batch Processing Version
 Processes ALL pages in batches of 20, no sampling.
+FIXED: Now extracts EXACT section names from document headings.
 """
 import json
 from typing import List, Dict
@@ -41,12 +42,29 @@ class SectionDetectionAgent:
                 Your task is to:
                 1. Analyze document pages
                 2. Identify where each section begins and ends
-                3. Classify each section by type
-                4. Return a structured JSON array of sections
+                3. Classify each section by type from the list above
+                4. Extract the EXACT section name/title as it appears in the document
+                5. Return a structured JSON array of sections
 
+                CRITICAL RULES FOR SECTION NAMES:
+                - section_name MUST be the EXACT text of the section heading/title from the document
+                - DO NOT create descriptive names or paraphrase
+                - DO NOT generate names based on content
+                - Copy the section heading EXACTLY as written (preserving capitalization, punctuation, numbers, etc.)
+                - Examples of CORRECT extraction:
+                  * Document shows: "2.1 Material Risks and Controls" → section_name: "2.1 Material Risks and Controls"
+                  * Document shows: "SAFETY" → section_name: "SAFETY"
+                  * Document shows: "Task Activities" → section_name: "Task Activities"
+                  * Document shows: "3. Additional PPE Required" → section_name: "3. Additional PPE Required"
+                - Examples of INCORRECT extraction:
+                  * Document shows: "Material Risks and Controls" → section_name: "Risk Management Section" ❌
+                  * Document shows: "SAFETY" → section_name: "Safety Information" ❌
+                - If a section has no visible heading/title, use "Untitled Section [page X]" where X is the start page
+                
                 Guidelines:
                 - Be precise with page boundaries
                 - Pay attention to headings, visual separators, content changes
+                - Look for section numbers, titles, and headers in the document
                 - If unsure about section type, use 'general'
                 - Sections should not overlap
                 - All pages must be covered by sections
@@ -78,12 +96,12 @@ class SectionDetectionAgent:
         )
         
         try:
-            if total_pages <= self.MAX_IMAGES_PER_CALL:
-                # Single batch
-                sections = self._detect_single_batch(pages_data, document_id)
-            else:
-                # Multiple batches
-                sections = self._detect_multi_batch(pages_data, document_id)
+            # if total_pages <= self.MAX_IMAGES_PER_CALL:
+            #     # Single batch
+            #     sections = self._detect_single_batch(pages_data, document_id)
+            # else:
+            #     # Multiple batches
+            sections = self._detect_multi_batch(pages_data, document_id)
             
             # Save intermediate result
             self.storage.save_detection_result(document_id, sections)
@@ -93,7 +111,7 @@ class SectionDetectionAgent:
             
         except Exception as e:
             logger.error(f"[{document_id}] Section detection failed: {e}")
-            return self._fallback_section_detection(pages_data)
+            return None
     
     def _detect_single_batch(
         self,
@@ -220,7 +238,7 @@ class SectionDetectionAgent:
         
         Strategy:
         1. Collect all sections from batches
-        2. Merge sections that span batch boundaries (same type)
+        2. Merge sections that span batch boundaries (same type AND same name)
         3. Validate and fix gaps/overlaps
         """
         logger.info(f"[{document_id}] Merging {len(batch_sections)} batches")
@@ -231,19 +249,21 @@ class SectionDetectionAgent:
             all_sections.extend(batch_info['sections'])
         
         if not all_sections:
-            return self._create_default_section(total_pages)
+            return None
         
         # Sort by start page
         all_sections = sorted(all_sections, key=lambda s: s['start_page'])
         
-        # Merge adjacent sections of same type
+        # Merge adjacent sections of same type AND same name
         merged = []
         current_section = all_sections[0]
         
         for next_section in all_sections[1:]:
             # Check if we should merge with current section
+            # FIXED: Only merge if both type AND name match exactly
             if (current_section['section_name'] == next_section['section_name'] and
-                current_section['end_page'] >= next_section['start_page']):
+                current_section['section_type'] == next_section['section_type'] and
+                current_section['end_page'] >= next_section['start_page'] - 1):
                 # Merge: extend current section
                 logger.debug(
                     f"Merging sections: {current_section['section_name']} "
@@ -272,9 +292,6 @@ class SectionDetectionAgent:
             f"→ {len(merged)} sections"
         )
         
-        # Validate and fix gaps/overlaps
-        # merged = self._validate_sections(merged, total_pages)
-        
         return merged
     
     def _build_detection_prompt(
@@ -287,23 +304,36 @@ class SectionDetectionAgent:
 
 Total pages shown: {len(sample_pages)}
 
+CRITICAL: Extract section names EXACTLY as they appear in the document headings/titles.
+
 """+"""
 Return ONLY a JSON array with this exact structure:
 [
     {
         "section_type": "one of: """+f"""{', '.join(self.section_definitions.keys())}"""+""",
-        "section_name": "descriptive name",
+        "section_name": "EXACT heading/title text from document (not descriptive)",
         "start_page": number (1-indexed),
         "end_page": number (1-indexed),
-        "description": "brief description",
+        "description": "brief description of content",
         "confidence": number (0.0-1.0)
     }
 ]
 """ + f"""
+
+CRITICAL RULES:
+1. section_name MUST be the EXACT text of the section heading from the document
+2. DO NOT create descriptive names - copy the heading verbatim
+3. Examples:
+   - If you see "2.1 Material Risks and Controls" → use "2.1 Material Risks and Controls"
+   - If you see "SAFETY" → use "SAFETY"
+   - If you see "Additional PPE Required" → use "Additional PPE Required"
+   - DO NOT use names like "Safety Information Section" or "Risk Management"
+4. If no heading is visible, use "Untitled Section [page X]"
+
 Requirements:
 - Sections must not overlap
 - All pages must be covered
-- Use proper section types
+- Use proper section types from the list
 - Be precise with page numbers
 
 Return the JSON array now, no other text:
@@ -325,32 +355,37 @@ CONTEXT:
 - Total document pages: {total_pages}
 - This batch shows: pages {start_page} to {end_page} ({num_pages_in_batch} pages)
 - You are seeing pages {start_page}-{end_page} of the complete document
-- You are analyzing a subset of the complete document
 
 YOUR TASK:
 Identify sections that START and/or END within pages {start_page}-{end_page}.
-- A section may start before page {start_page} (if it continues from previous batch)
-- A section may end after page {end_page} (if it continues into next batch)
-- Return sections with page numbers in the range {start_page}-{end_page}
+Extract the EXACT section headings/titles as they appear in the document.
+
+CRITICAL: section_name must be the EXACT text from the document heading, NOT a description.
+Examples:
+- Document heading says "Material Risks and Controls" → section_name: "Material Risks and Controls"
+- Document heading says "3.2 SAFETY" → section_name: "3.2 SAFETY"
+- Document heading says "Task Activities" → section_name: "Task Activities"
+- DO NOT use descriptive names like "Safety Section" or "Risk Management Information"
 
 """+"""
 Return ONLY a JSON array with this exact structure:
 [
     {
         "section_type": "one of: """+f"""{', '.join(self.section_definitions.keys())}"""+""",
-        "section_name": "descriptive name",
+        "section_name": "EXACT heading text from document",
         "start_page": number ("""+f"""{start_page}-{end_page}"""+"""),
         "end_page": number ("""+f"""{start_page}-{end_page}"""+"""),
-        "description": "brief description",
         "confidence": number (0.0-1.0)
     }
 ]
 """+f"""
-CRITICAL:
+
+RULES:
 - Page numbers must be between {start_page} and {end_page}
 - If a section starts before {start_page}, use {start_page} as start_page
 - If a section ends after {end_page}, use {end_page} as end_page
 - All pages {start_page}-{end_page} must be covered
+- section_name MUST be the exact heading text, not a description
 
 Return the JSON array now, no other text:
 """
@@ -388,7 +423,7 @@ Return the JSON array now, no other text:
     ) -> List[Dict]:
         """Validate and adjust section boundaries."""
         if not sections:
-            return self._create_default_section(total_pages)
+            return None
         
         sections = sorted(sections, key=lambda s: s['start_page'])
         
@@ -435,39 +470,9 @@ Return the JSON array now, no other text:
         """Create a single default section covering all pages."""
         return [{
             'section_type': 'general',
-            'section_name': 'Document Content',
+            'section_name': f'Untitled Section [page 1]',
             'start_page': 1,
             'end_page': total_pages,
             'description': 'Complete document (fallback section)',
             'confidence': 0.5
         }]
-    
-    def _fallback_section_detection(
-        self,
-        pages_data: List[Dict]
-    ) -> List[Dict]:
-        """Simple fallback section detection."""
-        total_pages = len(pages_data)
-        
-        if total_pages <= 5:
-            return self._create_default_section(total_pages)
-        
-        pages_per_section = 5
-        sections = []
-        
-        for i in range(0, total_pages, pages_per_section):
-            start_page = i + 1
-            end_page = min(i + pages_per_section, total_pages)
-            
-            sections.append({
-                'section_type': 'general',
-                'section_name': f'Section {len(sections) + 1}',
-                'start_page': start_page,
-                'end_page': end_page,
-                'description': 'Auto-detected section',
-                'confidence': 0.6
-            })
-        
-        logger.warning(f"Using fallback detection: {len(sections)} sections")
-        
-        return sections

@@ -49,7 +49,7 @@ class PDFToJSONPipeline:
         try:
             # STAGE 1: Extract PDF to images
             logger.info("STAGE 1: Extracting PDF pages...")
-            pages_data = self.pdf_processor.pdf_to_images(str(pdf_path), extract_with_bedrock=True)
+            pages_data = self.pdf_processor.pdf_to_images(str(pdf_path), extract_with_bedrock=False)
             logger.info(f"Extracted {len(pages_data)} pages")
             
             # STAGE 2: Detect sections
@@ -153,6 +153,9 @@ class PDFToJSONPipeline:
         
         for idx, section in enumerate(sections, 1):
             section_name = section['section_name']
+            next_section_name = "<END OF DOCUMENT>"
+            if idx < len(sections):
+                next_section_name = sections[idx]['section_name']
             
             try:
                 logger.info(f"  [{idx}/{len(sections)}] Extracting: {section_name}")
@@ -172,6 +175,7 @@ class PDFToJSONPipeline:
                 section_json = extractor.extract_section(
                     section_pages,
                     section,
+                    next_section_name,
                     document_id
                 )
                 

@@ -28,336 +28,62 @@ SECTION_DEFINITIONS = {
 # ============================================================================
 
 SECTION_SCHEMAS: Dict[str, Dict[str, Any]] = {
-    'safety': {
-        'type': 'object',
-        'properties': {
-            'safety_icon': {
-                'type': 'object',
-                'properties': {
-                    'text': {'type': 'string', 'description': 'Text content from safety icon'},
-                    'image': {'type': 'string', 'description': 'Base64 image or description of safety icon'}
-                },
-                'required': ['text', 'image']
-            },
-            'safety_statement': {
-                'type': 'array',
-                'items': {
-                    'type': 'object',
-                    'properties': {
-                        'text': {'type': 'string', 'description': 'Safety statement text'},
-                        'image': {'type': 'string', 'description': 'Associated image or icon'}
-                    },
-                    'required': ['text', 'image']
-                },
-                'description': 'List of safety statements'
-            },
-            'safety_additional': {
-                'type': 'array',
-                'items': {
-                    'type': 'object',
-                    'properties': {
-                        'seq': {'type': 'string', 'description': 'Sequence number'},
-                        'text': {'type': 'string', 'description': 'Additional safety note text'}
-                    },
-                    'required': ['seq', 'text']
-                },
-                'description': 'Additional safety notes'
-            }
-        },
-        'required': ['safety_icon', 'safety_statement', 'safety_additional']
-    },
-    
-    'material_risks_and_controls': {
-        'type': 'array',
-        'items': {
-            'type': 'object',
-            'properties': {
-                'risk': {
-                    'type': 'object',
-                    'properties': {
-                        'text': {'type': 'string', 'description': 'Risk name or title'},
-                        'image': {'type': 'string', 'description': 'Risk icon or image'}
-                    },
-                    'required': ['text', 'image']
-                },
-                'risk_description': {
-                    'type': 'object',
-                    'properties': {
-                        'text': {'type': 'string', 'description': 'Detailed risk description'},
-                        'image': {'type': 'string', 'description': 'Risk diagram or image'}
-                    },
-                    'required': ['text', 'image']
-                },
-                'critical_controls': {
-                    'type': 'array',
-                    'items': {
-                        'type': 'object',
-                        'properties': {
-                            'text': {'type': 'string', 'description': 'Control measure text'},
-                            'image': {'type': 'string', 'description': 'Control measure icon or image'}
-                        },
-                        'required': ['text', 'image']
-                    },
-                    'description': 'List of critical controls for this risk'
-                }
-            },
-            'required': ['risk', 'risk_description', 'critical_controls']
-        },
-        'description': 'Array of material risks and their controls'
-    },
-    
-    'task_activities': {
-        'type': 'array',
-        'items': {
-            'type': 'object',
-            'properties': {
-                'sequence_no': {
-                    'type': 'object',
-                    'properties': {
-                        'text': {'type': 'string', 'description': 'Sequence number'}
-                    },
-                    'required': ['text']
-                },
-                'sequence_name': {
-                    'type': 'object',
-                    'properties': {
-                        'text': {'type': 'string', 'description': 'Sequence name or title'}
-                    },
-                    'required': ['text']
-                },
-                'step_no': {
-                    'type': 'object',
-                    'properties': {
-                        'text': {'type': 'string', 'description': 'Step number'},
-                        'image': {'type': 'string', 'description': 'Step number badge or icon'}
-                    },
-                    'required': ['text', 'image']
-                },
-                'step_description': {
-                    'type': 'array',
-                    'items': {
-                        'type': 'object',
-                        'properties': {
-                            'text': {'type': 'string', 'description': 'Step description text'},
-                            'image': {'type': 'string', 'description': 'Step image or diagram'}
-                        },
-                        'required': ['text', 'image']
-                    },
-                    'description': 'Step descriptions'
-                },
-                'photo_diagram': {
-                    'type': 'array',
-                    'items': {
-                        'type': 'object',
-                        'properties': {
-                            'text': {'type': 'string', 'description': 'Photo/diagram caption'},
-                            'image': {'type': 'string', 'description': 'Photo or diagram image'}
-                        },
-                        'required': ['text', 'image']
-                    },
-                    'description': 'Photos or diagrams for this step'
-                },
-                'notes': {
-                    'type': 'array',
-                    'items': {
-                        'type': 'object',
-                        'properties': {
-                            'text': {'type': 'string', 'description': 'Note text'},
-                            'image': {'type': 'string', 'description': 'Note icon or image'}
-                        },
-                        'required': ['text', 'image']
-                    },
-                    'description': 'Additional notes for this step'
-                },
-                'execution_condition': {
-                    'type': 'object',
-                    'properties': {
-                        'text': {'type': 'string', 'description': 'Execution condition or prerequisite'}
-                    },
-                    'required': ['text']
-                }
-            },
-            'required': ['sequence_no', 'sequence_name', 'step_no', 'step_description', 'photo_diagram', 'notes', 'execution_condition']
-        },
-        'description': 'Array of task activities'
-    },
-    
-    'additional_controls_required': {
-        'type': 'array',
-        'items': {
-            'type': 'object',
-            'properties': {
-                'control_type': {
-                    'type': 'object',
-                    'properties': {
-                        'text': {'type': 'string', 'description': 'Type of control'},
-                        'image': {'type': 'string', 'description': 'Control type icon'}
-                    },
-                    'required': ['text', 'image']
-                },
-                'reason_for_control': {
-                    'type': 'array',
-                    'items': {
-                        'type': 'object',
-                        'properties': {
-                            'text': {'type': 'string', 'description': 'Reason text'},
-                            'image': {'type': 'string', 'description': 'Reason icon or diagram'}
-                        },
-                        'required': ['text', 'image']
-                    },
-                    'description': 'Reasons for this control'
-                }
-            },
-            'required': ['control_type', 'reason_for_control']
-        },
-        'description': 'Array of additional controls'
-    },
-    
-    'additional_ppe_required': {
-        'type': 'array',
-        'items': {
-            'type': 'object',
-            'properties': {
-                'text': {'type': 'string', 'description': 'PPE item description'},
-                'image': {'type': 'string', 'description': 'PPE item icon or image'}
-            },
-            'required': ['text', 'image']
-        },
-        'description': 'Array of required PPE items'
-    },
-    
-    'specific_competencies_knowledge_and_skills': {
-        'type': 'array',
-        'items': {
-            'type': 'object',
-            'properties': {
-                'text': {'type': 'string', 'description': 'Competency, knowledge or skill description'},
-                'image': {'type': 'string', 'description': 'Competency icon or badge'}
-            },
-            'required': ['text', 'image']
-        },
-        'description': 'Array of required competencies, knowledge and skills'
-    },
-    
-    'tooling_equipment_required': {
-        'type': 'array',
-        'items': {
-            'type': 'object',
-            'properties': {
-                'tool_set': {
-                    'type': 'object',
-                    'properties': {
-                        'text': {'type': 'string', 'description': 'Tool set name or category'}
-                    },
-                    'required': ['text']
-                },
-                'tools': {
-                    'type': 'array',
-                    'items': {
-                        'type': 'object',
-                        'properties': {
-                            'text': {'type': 'string', 'description': 'Tool name or description'}
-                        },
-                        'required': ['text']
-                    },
-                    'description': 'List of tools in this set'
-                }
-            },
-            'required': ['tool_set', 'tools']
-        },
-        'description': 'Array of tool sets and their tools'
-    },
-    
-    'reference_documentation': {
-        'type': 'array',
-        'items': {
-            'type': 'object',
-            'properties': {
-                'document_reference_number': {
-                    'type': 'object',
-                    'properties': {
-                        'text': {'type': 'string', 'description': 'Document reference number'},
-                        'image': {'type': 'string', 'description': 'Document icon or badge'}
-                    },
-                    'required': ['text', 'image']
-                },
-                'document_description': {
-                    'type': 'object',
-                    'properties': {
-                        'text': {'type': 'string', 'description': 'Document description or title'},
-                        'image': {'type': 'string', 'description': 'Document thumbnail or icon'}
-                    },
-                    'required': ['text', 'image']
-                }
-            },
-            'required': ['document_reference_number', 'document_description']
-        },
-        'description': 'Array of reference documents'
-    },
-    
-    'reference_drawings': {
-        'type': 'array',
-        'items': {
-            'type': 'object',
-            'properties': {
-                'mechanical_drawings': {
-                    'type': 'array',
-                    'items': {
-                        'type': 'object',
-                        'properties': {
-                            'text': {'type': 'string', 'description': 'Mechanical drawing reference or description'},
-                            'image': {'type': 'string', 'description': 'Mechanical drawing image'}
-                        },
-                        'required': ['text', 'image']
-                    },
-                    'description': 'Mechanical drawings'
-                },
-                'structural_civil_drawings': {
-                    'type': 'array',
-                    'items': {
-                        'type': 'object',
-                        'properties': {
-                            'text': {'type': 'string', 'description': 'Structural/civil drawing reference or description'},
-                            'image': {'type': 'string', 'description': 'Structural/civil drawing image'}
-                        },
-                        'required': ['text', 'image']
-                    },
-                    'description': 'Structural and civil drawings'
-                }
-            },
-            'required': ['mechanical_drawings', 'structural_civil_drawings']
-        },
-        'description': 'Array of reference drawings grouped by type'
-    },
-    
-    'attached_images': {
-        'type': 'array',
-        'items': {
-            'type': 'object',
-            'properties': {
-                'text': {'type': 'string', 'description': 'Image caption or description'},
-                'image': {'type': 'string', 'description': 'Attached image'}
-            },
-            'required': ['text', 'image']
-        },
-        'description': 'Array of attached images'
-    },
-    
-    'general': {
-        'type': 'object',
-        'properties': {
-            'content': {
-                'type': 'string',
-                'description': 'General content'
-            },
-            'images_text': {
-                'type': 'array',
-                'items': {'type': 'string'},
-                'description': 'Text from images'
-            }
-        },
-        'required': ['content']
-    }
+    "safety": [
+        {"safety_icon": {"text": "", "image": ""}},
+        {"safety_statement": [{"text": "", "image": ""}]},
+        {"safety_additional": [{"seq": "", "text" : ""}]}
+    ],
+    "material_risks_and_controls": [
+        {"risk": {"text": "", "image": ""}},
+        {"risk_description": {"text": "", "image": ""}},
+        {"critical_controls": [{"text": "", "image": ""}]}
+    ],
+    "additional_controls_required": [
+        {"control_type": {"text": "", "image": ""}},
+        {"reason_for_control": [{"text": "", "image": ""}]}
+    ],
+    "additional_ppe_required": [
+        {"text": "", "image": ""}
+    ],
+    "specific_competencies_knowledge_and_skills": [
+        {"text": "", "image": ""}
+    ],
+    "tooling_equipment_required": [
+        {"tool_set": {"text": ""}},
+        {"tools": [{"text": ""}]}
+    ],
+    "reference_documentation": [
+        {"document_reference_number": {"text": "", "image": ""}},
+        {"document_description": {"text": "", "image": ""}}
+    ],
+    "reference_drawings": [
+        {
+            "mechanical_drawings": [{"text": "", "image": ""}],
+            "structural_civil_drawings": [{"text": "", "image": ""}]
+        }
+    ],
+    "attached_images": [{"text": "", "image": ""}],
+    "task_activities": [
+        {
+            "equipment_asset": {},
+            "sequence_no": {},
+            "sequence_name": {"text": ""},
+            "maintainable_item": [{"text": ""}],
+            "lmi": [],
+            "step_no": {"text": "", "image": ""},
+            "step_description": [{"text":"", "image": ""}],
+            "photo_diagram": [],
+            "notes": [],
+            "acceptable_limit": [{"text":"", "image":""}],
+            "question": [],
+            "corrective_action": [],
+            "execution_condition": {"text":"", "image":""},
+            "other_content": []
+        }
+    ],
+    "general": [
+        {"text": "", "image": ""}
+    ]
 }
 
 

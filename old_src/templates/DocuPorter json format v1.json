@@ -1,0 +1,447 @@
+{	
+"Document_Id": "",
+"Document_header": 	
+{	
+	"Document_Source": 
+	{
+	"orig_text": "",
+	"text": ""
+	},
+	"Document_Type":
+	{
+	"orig_text": "",
+	"text": ""
+	},
+	"Document_Number":
+	{
+	"orig_text": "",
+	"text": ""
+	},
+	"Document_Version_Number":
+	{
+	"orig_text": "",
+	"text": ""
+	},
+	"Work_Description": 
+	{
+	"orig_text": "",
+	"text": ""
+	},
+	"Purpose": 
+	{
+	"orig_text": "",
+	"text": ""
+	},
+	"Sections": []
+},	
+	
+"safety": {	
+	"safety_icon": 
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	"safety_statement": [
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	}
+	],
+	"safety_additional": [
+	{
+	"orig_seq": "",
+	"orig_text": "",
+	"seq": "",
+	"text": ""
+	},
+	{
+	"orig_seq": "",
+	"orig_text": "",
+	"seq": "",
+	"text": ""
+	}
+	]
+},	
+	
+"material_risks_and_controls": [	
+	{ 
+	"risk":
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	"risk_description":
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	"critical_controls": [
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	}
+	]
+	},
+	{ 
+	"risk":
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	"risk_description":
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	"critical_controls": [
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	}
+	]
+	}
+  ],	
+	
+"additional_controls_required": [	
+	{
+	"control_type": 
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	"reason_for_control":
+	[
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	}
+	]
+	},
+	{
+	"control_type": 
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	"reason_for_control":
+	[
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	}
+	]
+	}
+  ],	
+	
+"additional_ppe_required": [	
+	{ 
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	{ 
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	}
+  ],	
+ 	
+"specific_competencies_knowledge_and_skills": [	
+	{ 
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	{ 
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	}
+  ],	
+	
+"tooling_equipment_required": [	
+	{ 
+	   "tool_set":
+	{
+	"orig_text": "",
+	"text": ""
+	},
+	"tools":
+	[
+	{
+	"orig_text": "",
+	"text": ""
+	},
+	{ 
+	"orig_text": "",
+	"text": ""
+	}
+	]
+	}
+  ],	
+	
+"reference_documentation": [	
+	{ 
+	"document_reference_number":
+	{ 
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	"document_description":
+	{ 
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	}
+	},
+	{ 
+	"document_reference_number":
+	{ 
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	"document_description":
+	{ 
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	}
+	}
+  ],	
+	
+  "attached images": [	
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	}
+  ],	
+	
+ "task_activities":[	
+	{
+	"equipment_asset":
+	{
+	"orig_text": "",
+	"text": ""
+	},
+	"sequence_no":
+	{
+	"orig_text": "",
+	"text": ""
+	},
+	"sequence_name":
+	{
+	"orig_text": "",
+	"text": ""
+	},
+	"maintainable_item": 
+	[
+	{
+	"orig_text": "",
+	"text": ""
+	},
+	{
+	"orig_text": "",
+	"text": ""
+	}
+	],
+	"lmi": 
+	[
+	{
+	"orig_text": "",
+	"text": ""
+	},
+	{
+	"orig_text": "",
+	"text": ""
+	}
+	],
+	"step_no": 
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	"step_description": 
+	[
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	}
+	],
+	"photo_diagram":
+	[
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	}
+	],
+	"notes":
+	[
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	}
+	],
+	"acceptable_limit":
+	[
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	}
+	],
+	"question":
+	[
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	}
+	],
+	"corrective_action":
+	[
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	}
+	],
+	"execution_condition":
+	{
+	"orig_text": "",
+	"text": ""
+	},
+	"other_content":
+	[
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	{
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	}
+	]
+	}
+],	
+  "unhandled_content": [	
+	{
+	"section": "",
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	},
+	{
+	"section": "",
+	"orig_text": "",
+	"orig_image": "",
+	"text": "",
+	"image": ""
+	}
+  ]	
+}	

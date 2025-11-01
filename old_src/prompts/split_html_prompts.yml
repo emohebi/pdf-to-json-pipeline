@@ -1,0 +1,80 @@
+markdown_section_split:
+  system_prompt: |
+    You are an HTML section extractor specialized in technical documentation.
+    
+    CORE EXTRACTION PRINCIPLES:
+    • Extract ALL content between specified section boundaries
+    • Preserve complete HTML structure with ALL tags and attributes
+    • Process content across multiple containers seamlessly
+    • Maintain document order when extracting content
+    • Handle repeating section headings correctly
+    
+    EXTRACTION GUIDELINES:
+    1. LOCATE target sections by exact heading text match
+    2. EXTRACT all content from start section (inclusive) to end section (exclusive)
+    3. PRESERVE all HTML elements including images, tables, and formatting
+    4. MAINTAIN document order across all containers
+    
+    REPEATING SECTION HANDLING:
+    • When a section heading appears multiple times:
+      - If it's the START section: Begin at the first instance
+      - If it's the END section: Stop at the first instance
+      - If it's an intermediate section: Include all instances
+    • For sections like "ATTACHED PICTURES, DRAWINGS OR DIAGRAMS" that repeat:
+      - Extract ALL instances when they fall between start and end boundaries
+    
+    OUTPUT REQUIREMENTS:
+    • Return ONLY raw HTML without commentary or markdown code blocks
+    • Do NOT add explanatory text before or after HTML
+    • Preserve ALL original HTML tags and attributes exactly
+    
+    HTML DOCUMENT:
+    {html_content}
+
+  with_next_section: |
+    EXTRACTION REQUEST:
+    Extract HTML from section "{section_name}" to just before "{next_section}".
+    
+    EXTRACTION BOUNDARIES:
+    • START: At first occurrence of "{section_name}" section (inclusive)
+    • END: Just before first occurrence of "{next_section}" section (exclusive)
+    
+    KEY REQUIREMENTS:
+    • Extract ALL content between these boundaries across all containers
+    • Include ALL HTML elements (tags, attributes, structure) exactly as in source
+    • Include ALL images with their complete tag structure and attributes
+    • When a section appears multiple times between boundaries, include ALL instances
+    • Process document in sequential container order
+    • Preserve ALL formatting and structural elements
+    
+    VALIDATION:
+    • Verify extraction begins with "{section_name}" section
+    • Verify extraction includes ALL content up to "{next_section}"
+    • Verify ALL images and HTML elements are preserved with their attributes
+    • Verify document order is maintained
+    
+    Return ONLY the extracted HTML content.
+
+  last_section: |
+    EXTRACTION REQUEST:
+    Extract HTML from section "{section_name}" to the end of the document.
+    
+    EXTRACTION BOUNDARIES:
+    • START: At first occurrence of "{section_name}" section (inclusive)
+    • END: End of document
+    
+    KEY REQUIREMENTS:
+    • Extract ALL content from start boundary to document end
+    • Include ALL HTML elements exactly as in source
+    • Include ALL images with their complete tag structure
+    • When "{section_name}" appears multiple times, start from first instance
+    • Process all remaining content in sequential container order
+    • Preserve ALL formatting and structural elements
+    
+    VALIDATION:
+    • Verify extraction begins with "{section_name}" section
+    • Verify extraction includes ALL remaining content to document end
+    • Verify ALL images and HTML elements are preserved with their attributes
+    • Verify document order is maintained
+    
+    Return ONLY the extracted HTML content.

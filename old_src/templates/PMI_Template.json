@@ -1,0 +1,55 @@
+{
+    "safety": [
+        {"safety_icon": {"text": "", "image": ""}},
+        {"safety_statement": [{"text": "", "image": ""}]},
+        {"safety_additional": [{"seq": "", "text" : ""}]}
+    ],
+    "material_risks_and_controls": [
+        {"risk": {"text": "", "image": ""}},
+        {"risk_description": {"text": "", "image": ""}},
+        {"critical_controls": [{"text": "", "image": ""}]}
+    ],
+    "additional_controls_required": [
+        {"control_type": {"text": "", "image": ""}},
+        {"reason_for_control": [{"text": "", "image": ""}]}
+    ],
+    "additional_ppe_required": [
+        {"text": "", "image": ""}
+    ],
+    "specific_competencies_knowledge_and_skills": [
+        {"text": "", "image": ""}
+    ],
+    "tooling_equipment_required": [
+        {"tool_set": {"text": ""}},
+        {"tools": [{"text": ""}]}
+    ],
+    "reference_documentation": [
+        {"document_reference_number": {"text": "", "image": ""}},
+        {"document_description": {"text": "", "image": ""}}
+    ],
+    "reference_drawings": [
+        {
+            "mechanical_drawings": [{"text": "", "image": ""}],
+            "structural_civil_drawings": [{"text": "", "image": ""}]
+        }
+    ],
+    "attached_images": [{"text": "", "image": ""}],
+    "task_activities": [
+        {
+            "equipment_asset": {},
+            "sequence_no": {},
+            "sequence_name": {"text": ""},
+            "maintainable_item": [{"text": ""}],
+            "lmi": [],
+            "step_no": {"text": "", "image": ""},
+            "step_description": [{"text":"", "image": ""}],
+            "photo_diagram": [],
+            "notes": [],
+            "acceptable_limit": [{"text":"", "image":""}],
+            "question": [],
+            "corrective_action": [],
+            "execution_condition": {"text":"", "image":""},
+            "other_content": []
+        }
+    ]
+}

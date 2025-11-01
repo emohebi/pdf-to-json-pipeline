@@ -247,6 +247,7 @@ Wrong: {{"text": "High voltage warning", "image": "warning.png"}}
         self,
         section_pages: List[Dict],
         section_info: Dict,
+        next_section_name: str,
         document_id: str
     ) -> Dict:
         logger.info(
@@ -256,7 +257,7 @@ Wrong: {{"text": "High voltage warning", "image": "warning.png"}}
         
         try:
             images_b64 = prepare_images_for_bedrock(section_pages)
-            prompt = self._build_extraction_prompt(section_info)
+            prompt = self._build_extraction_prompt(section_info, next_section_name)
             
             response = invoke_bedrock_multimodal(
                 images=images_b64,
@@ -309,7 +310,7 @@ Wrong: {{"text": "High voltage warning", "image": "warning.png"}}
             )
             raise
     
-    def _build_extraction_prompt(self, section_info: Dict) -> str:
+    def _build_extraction_prompt(self, section_info: Dict, next_section_name: str = None) -> str:
         return f"""Extract all information from this document section into JSON format.
 
 Section: {section_info['section_name']} ({section_info['section_type']})
@@ -319,19 +320,22 @@ REQUIRED JSON SCHEMA:
 {json.dumps(self.section_schema, indent=2)}
 
 CRITICAL REMINDER:
-- Extract ALL text EXACTLY as written - do not paraphrase or reword
-- Copy text word-for-word from the document
-- Preserve original spelling, capitalization, and punctuation
+- Extract ALL text EXACTLY as written below the section "{section_info['section_name']}" but before next section: "{next_section_name}" - do not paraphrase or reword
+- Do not start from the top of the pages only extract information below the section until next section
+- Copy text word-for-word from the section
+- Preserve original order, spelling, capitalization, and punctuation
 - For "image" fields: describe what the image shows (not a filename)
 - Use empty string "" for missing data, never use "N/A" or placeholder text
 - Return ONLY the JSON, no markdown code blocks or extra text
 
 EXTRACTION STEPS:
 1. Look at ALL pages shown ({section_info['start_page']} to {section_info['end_page']})
-2. Identify all text in the section (including text in images)
-3. Extract each piece of text EXACTLY as it appears
-4. Structure according to the schema above
-5. Include descriptions for any images/diagrams present
+2. Identify all text in the section {section_info['section_name']} (including text in images) util you reach the next section: {next_section_name}
+3. Extract each piece of text EXACTLY as it appears (DO NOT not duplicate the information if the section is across two pages)
+4. Structure strictly according to the schema above
+5. Extract text from images if image is available
+6. All text which you think should go under "other_content" key please put them under "notes" key in the JSON format
+6. Populate all the related values in the above JSON schema based on the section's text, if no related inforamtion available for a particular key in the schema then leave it as "".
 
 Return the complete JSON object now (start with {{ or [, no markdown):
 """
@@ -355,35 +359,3 @@ Return the complete JSON object now (start with {{ or [, no markdown):
             
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse extraction response: {e}")
-            logger.debug(f"Response preview: {response[:500]}...")
-            
-            # Try to salvage partial JSON
-            # Attempt 1: Add closing brackets if missing
-            if response.startswith('[') and not response.endswith(']'):
-                try:
-                    parsed = json.loads(response + ']')
-                    return parsed  # Return list as-is
-                except:
-                    pass
-            
-            if response.startswith('{') and not response.endswith('}'):
-                try:
-                    parsed = json.loads(response + '}')
-                    return parsed
-                except:
-                    pass
-            
-            # Attempt 2: Try to extract JSON from longer text
-            import re
-            json_pattern = r'(\[.*\]|\{.*\})'
-            matches = re.findall(json_pattern, response, re.DOTALL)
-            if matches:
-                for match in matches:
-                    try:
-                        parsed = json.loads(match)
-                        return parsed  # Return whatever we parsed
-                    except:
-                        continue
-            
-            # If all else fails, raise the original error
-            raise

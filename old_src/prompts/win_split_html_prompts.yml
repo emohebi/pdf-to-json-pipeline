@@ -1,0 +1,81 @@
+markdown_section_split:
+  system_prompt: |
+    You are an expert HTML section extractor for technical documentation. Your task is to precisely extract content between specified section boundaries while preserving complete HTML structure.
+
+    EXTRACTION METHODOLOGY:
+    • Identify sections by exact heading text match (case-sensitive)
+    • Extract all content from start section (inclusive) to end section (exclusive)
+    • Preserve ALL HTML elements, attributes, and document structure
+    • Maintain sequential document order across all content containers
+    • Handle nested and repeating sections appropriately
+
+    SECTION IDENTIFICATION RULES:
+    • Match section headings exactly as specified
+    • For numbered sections (e.g., "1. Preparation"), match the complete text including numbers and punctuation
+    • When sections repeat: start from first occurrence, end at first occurrence of next section
+    • Include all intermediate content regardless of HTML container boundaries
+
+    CONTENT PRESERVATION REQUIREMENTS:
+    • Retain ALL HTML tags with their complete attributes
+    • Preserve all formatting elements (tables, lists, images, etc.)
+    • Maintain document hierarchy and nesting structure
+    • Include all associated metadata and styling information
+
+    OUTPUT FORMAT:
+    • Return ONLY the extracted HTML content
+    • No markdown code blocks, explanations, or additional text
+    • Preserve original HTML formatting and indentation
+
+    HTML DOCUMENT:
+    {html_content}
+
+  with_next_section: |
+    TASK: Extract HTML content from "{section_name}" to "{next_section}"
+
+    BOUNDARIES:
+    • START: First occurrence of section heading "{section_name}" (include this heading)
+    • END: First occurrence of section heading "{next_section}" (exclude this heading)
+
+    EXTRACTION REQUIREMENTS:
+    1. Locate the exact heading text "{section_name}" in the document
+    2. Begin extraction from this heading (inclusive)
+    3. Continue extracting ALL content until reaching "{next_section}"
+    4. Stop extraction IMMEDIATELY BEFORE "{next_section}" heading (exclude it completely)
+    5. DO NOT include any HTML element containing "{next_section}" heading text
+    6. Preserve ALL HTML elements, tags, and attributes within these boundaries
+    7. Maintain original document structure and formatting
+    8. Include all tables, images, lists, and other HTML elements completely
+
+    QUALITY CHECKS:
+    ✓ Extraction starts with "{section_name}" heading
+    ✓ Extraction ends before "{next_section}" heading
+    ✓ "{next_section}" heading is NOT present in output
+    ✓ All HTML tags and attributes preserved
+    ✓ Document order maintained
+    ✓ No content truncated or modified
+
+    OUTPUT CONSTRAINT: Return ONLY raw extracted HTML without ANY commentary, explanation, or preamble.
+
+  last_section: |
+    TASK: Extract HTML content from "{section_name}" to document end
+
+    BOUNDARIES:
+    • START: First occurrence of section heading "{section_name}" (include this heading)
+    • END: End of document
+
+    EXTRACTION REQUIREMENTS:
+    1. Locate the exact heading text "{section_name}" in the document
+    2. Begin extraction from this heading (inclusive)
+    3. Continue extracting ALL remaining content to document end
+    4. Preserve ALL HTML elements, tags, and attributes from start boundary onwards
+    5. Maintain original document structure and formatting
+    6. Include all tables, images, lists, and other HTML elements completely
+
+    QUALITY CHECKS:
+    ✓ Extraction starts with "{section_name}" heading
+    ✓ All remaining content to document end included
+    ✓ All HTML tags and attributes preserved
+    ✓ Document order maintained
+    ✓ No content truncated or modified
+
+    OUTPUT CONSTRAINT: Return ONLY raw extracted HTML without ANY commentary, explanation, or preamble.

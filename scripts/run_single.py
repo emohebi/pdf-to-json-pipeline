@@ -32,7 +32,7 @@ def main():
     )
     
     args = parser.parse_args()
-    args.pdf = "./input/0008496.pdf"
+    args.pdf = "./input/0154585.pdf"
     # Validate PDF exists
     pdf_path = Path(args.pdf)
     if not pdf_path.exists():
