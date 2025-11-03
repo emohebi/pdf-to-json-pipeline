@@ -7,9 +7,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import time
 
-from config.settings import MAX_WORKERS
+from config.settings import MAX_WORKERS, MODEL
 from config.schemas import SECTION_SCHEMAS, get_section_schema
-from src.agents import SectionDetectionAgent, SectionExtractionAgent, ValidationAgent
+from src.agents import SectionDetectionAgent, SectionExtractionAgent, ValidationAgent, ReviewAgent
 from src.utils import PDFProcessor, StorageManager, setup_logger
 
 logger = setup_logger('pipeline')
@@ -24,8 +24,31 @@ class PDFToJSONPipeline:
         self.section_detector = SectionDetectionAgent()
         self.validator = ValidationAgent()
         self.storage = StorageManager()
+        self.review_agent = ReviewAgent()
+
+    def review_json(self, section_jsons: str, document_id = None):
+        review_results = self.review_agent.review_document(
+            section_jsons=section_jsons,
+            document_id=document_id
+        )
+        
+        # Log review summary
+        total_issues = sum(
+            len(issues) 
+            for key, issues in review_results.items() 
+            if key != 'error' and isinstance(issues, list)
+        )
+        
+        if total_issues == 0:
+            logger.info(f"Review PASSED - No issues found")
+        else:
+            logger.warning(f"Review found {total_issues} issue(s):")
+            logger.warning(f"    - Incomplete sentences: {len(review_results.get('incomplete_sentences', []))}")
+            logger.warning(f"    - Duplications: {len(review_results.get('duplications', []))}")
+            logger.warning(f"    - Order issues: {len(review_results.get('order_issues', []))}")
+        return review_results, total_issues
     
-    def process_single_pdf(self, pdf_path: str, parallel: bool = False) -> Dict:
+    def process_single_pdf(self, pdf_path: str, parallel: bool = False, review_json: str = None) -> Dict:
         """
         Process a single PDF document.
         
@@ -70,6 +93,12 @@ class PDFToJSONPipeline:
                 )
             
             logger.info(f"Extracted {len(section_jsons)} sections")
+
+            logger.info("STAGE 3.5: Reviewing extracted content...")
+            review_results, total_issues = self.review_json(
+                section_jsons=section_jsons,
+                document_id=document_id
+            )
             
             # STAGE 4: Validate and combine
             logger.info("STAGE 4: Validating and combining...")
@@ -82,7 +111,11 @@ class PDFToJSONPipeline:
                 'processing_timestamp': datetime.now().isoformat(),
                 'processing_duration': duration,
                 'model_used': 'claude-sonnet-4',
-                'extraction_mode': 'parallel' if parallel else 'sequential'
+                'extraction_mode': 'parallel' if parallel else 'sequential',
+                # Add review results to metadata
+                'review_results': review_results,
+                'review_passed': total_issues == 0,
+                'review_issues_count': total_issues
             }
             
             final_json = self.validator.validate_and_combine(

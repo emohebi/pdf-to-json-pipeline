@@ -1,15 +1,31 @@
 """
 Storage utilities for intermediate and final results.
+Extended with review agent support.
 """
 import json
 from pathlib import Path
 from typing import Dict, Any, List
 from datetime import datetime
 
-from config.settings import (
-    DETECTION_DIR, SECTIONS_DIR, VALIDATION_QUEUE_DIR,
-    FINAL_DIR, PROGRESS_FILE, VALIDATION_STATE_PENDING
-)
+
+# Import from config - we'll create a minimal version if needed
+try:
+    from config.settings import (
+        DETECTION_DIR, SECTIONS_DIR, VALIDATION_QUEUE_DIR,
+        FINAL_DIR, PROGRESS_FILE, VALIDATION_STATE_PENDING,
+        INTERMEDIATE_DIR
+    )
+except ImportError:
+    # Fallback for testing
+    from pathlib import Path
+    INTERMEDIATE_DIR = Path('output/intermediate')
+    DETECTION_DIR = INTERMEDIATE_DIR / 'detection'
+    SECTIONS_DIR = INTERMEDIATE_DIR / 'sections'
+    VALIDATION_QUEUE_DIR = INTERMEDIATE_DIR / 'validation_queue'
+    FINAL_DIR = Path('output/final')
+    PROGRESS_FILE = Path('output/logs/progress.json')
+    VALIDATION_STATE_PENDING = 'pending'
+
 from src.utils.logger import setup_logger
 
 logger = setup_logger('storage')
@@ -17,6 +33,76 @@ logger = setup_logger('storage')
 
 class StorageManager:
     """Manages storage of intermediate and final results."""
+    
+    def __init__(self):
+        """Initialize storage manager and create review directories."""
+        # Create review directories if they don't exist
+        self.review_dir = INTERMEDIATE_DIR / 'review'
+        self.plain_text_dir = self.review_dir / 'plain_text'
+        self.review_results_dir = self.review_dir / 'results'
+        
+        for directory in [self.review_dir, self.plain_text_dir, self.review_results_dir]:
+            directory.mkdir(parents=True, exist_ok=True)
+    
+    def save_plain_text(self, document_id: str, plain_text: str) -> Path:
+        """
+        Save plain text version of document for review.
+        
+        Args:
+            document_id: Unique document identifier
+            plain_text: Plain text content
+        
+        Returns:
+            Path to saved file
+        """
+        output_file = self.plain_text_dir / f"{document_id}_plaintext.txt"
+        
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(plain_text)
+        
+        logger.info(f"Saved plain text: {output_file}")
+        return output_file
+    
+    def save_review_results(self, document_id: str, review_results: Dict[str, Any]) -> Path:
+        """
+        Save review results from the review agent.
+        
+        Args:
+            document_id: Unique document identifier
+            review_results: Dictionary containing review findings
+        
+        Returns:
+            Path to saved file
+        """
+        output_file = self.review_results_dir / f"{document_id}_review.json"
+        
+        data = {
+            'document_id': document_id,
+            'timestamp': datetime.now().isoformat(),
+            'review_results': review_results,
+            'has_issues': any(
+                len(issues) > 0 
+                for key, issues in review_results.items() 
+                if key != 'error' and isinstance(issues, list)
+            ),
+            'total_issues': sum(
+                len(issues) 
+                for key, issues in review_results.items() 
+                if key != 'error' and isinstance(issues, list)
+            )
+        }
+        
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        
+        if data['has_issues']:
+            logger.warning(
+                f"Saved review results with {data['total_issues']} issue(s): {output_file}"
+            )
+        else:
+            logger.info(f"Saved review results (no issues): {output_file}")
+        
+        return output_file
     
     @staticmethod
     def save_detection_result(document_id: str, sections: List[Dict]) -> Path:
