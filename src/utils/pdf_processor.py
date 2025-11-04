@@ -1,5 +1,5 @@
 """
-PDF processing utilities.
+PDF processing utilities - FIXED VERSION with logo filtering.
 """
 import pymupdf
 from typing import List, Dict
@@ -219,42 +219,197 @@ class PDFProcessor:
             logger.error(f"Bedrock vision API error for page {page_num}: {e}")
             raise
     
-    def extract_images_from_pdf(self, pdf_path: str) -> List[Dict]:
+    def extract_images_from_pdf(self, pdf_path: str, output_dir: Path = None) -> List[Dict]:
         """
-        Extract embedded images from PDF.
+        Extract embedded images from PDF and save them to disk.
+        FILTERS OUT header/footer logos that appear on every page.
         
         Args:
             pdf_path: Path to PDF file
+            output_dir: Directory to save images (defaults to Media folder in output)
         
         Returns:
-            List of extracted images with metadata
+            List of extracted images with metadata and file paths (excluding logos)
         """
         pdf_path = Path(pdf_path)
         doc = pymupdf.open(str(pdf_path))
         
-        images = []
+        # Setup output directory
+        if output_dir is None:
+            from config.settings import OUTPUT_DIR
+            output_dir = OUTPUT_DIR / 'Media' / pdf_path.stem
+        
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # First pass: Collect all images with positions to detect logos
+        all_images = []
         
         for page_num in range(len(doc)):
             page = doc[page_num]
+            rect = page.rect
+            page_height = rect.height
+            
             image_list = page.get_images()
             
             for img_index, img in enumerate(image_list):
                 xref = img[0]
                 base_image = doc.extract_image(xref)
                 
-                images.append({
+                # Get image position on page
+                img_rects = page.get_image_rects(xref)
+                if img_rects:
+                    y_position = img_rects[0].y0
+                    y_bottom = img_rects[0].y1
+                    img_height = y_bottom - y_position
+                else:
+                    y_position = 0
+                    y_bottom = 0
+                    img_height = 0
+                
+                all_images.append({
                     'page_number': page_num + 1,
                     'image_index': img_index,
-                    'image_data': base_image['image'],
-                    'extension': base_image['ext'],
+                    'xref': xref,
+                    'base_image': base_image,
+                    'y_position': y_position,
+                    'y_bottom': y_bottom,
+                    'img_height': img_height,
+                    'page_height': page_height,
                     'width': base_image['width'],
                     'height': base_image['height']
                 })
         
+        # Detect logos: images that appear in similar positions across multiple pages
+        logos = self._detect_logos(all_images, len(doc))
+        
+        # Second pass: Save only non-logo images
+        images = []
+        saved_count = 0
+        skipped_count = 0
+        
+        for img_data in all_images:
+            # Check if this is a logo
+            is_logo = self._is_logo_image(img_data, logos)
+            
+            if is_logo:
+                skipped_count += 1
+                logger.debug(
+                    f"Skipping logo on page {img_data['page_number']}: "
+                    f"position={img_data['y_position']:.1f}, size={img_data['width']}x{img_data['height']}"
+                )
+                continue
+            
+            # Save this image
+            saved_count += 1
+            img_filename = f"page{img_data['page_number']}_img{saved_count}.{img_data['base_image']['ext']}"
+            img_path = output_dir / img_filename
+            
+            # Save image to disk
+            with open(img_path, 'wb') as f:
+                f.write(img_data['base_image']['image'])
+            
+            # Store relative path from output root
+            relative_path = f"Media/{pdf_path.stem}/{img_filename}"
+            
+            images.append({
+                'page_number': img_data['page_number'],
+                'image_index': saved_count,
+                'image_path': relative_path,
+                'local_path': str(img_path),
+                'extension': img_data['base_image']['ext'],
+                'width': img_data['width'],
+                'height': img_data['height'],
+                'y_position': img_data['y_position']
+            })
+        
         doc.close()
-        logger.info(f"Extracted {len(images)} embedded images from {pdf_path.name}")
+        logger.info(
+            f"Extracted {len(all_images)} total images from {pdf_path.name}: "
+            f"{saved_count} saved, {skipped_count} logos skipped"
+        )
+        logger.info(f"Images saved to: {output_dir}")
         
         return images
+    
+    def _detect_logos(self, all_images: List[Dict], total_pages: int) -> List[Dict]:
+        """
+        Detect logo images that appear in headers/footers across multiple pages.
+        
+        Args:
+            all_images: All extracted images with position data
+            total_pages: Total number of pages in document
+        
+        Returns:
+            List of logo patterns (position, size)
+        """
+        # Group images by approximate position and size
+        position_groups = {}
+        
+        for img in all_images:
+            # Calculate relative position (top 15% or bottom 15% of page = header/footer)
+            rel_pos = img['y_position'] / img['page_height'] if img['page_height'] > 0 else 0
+            
+            # Only consider images in header (top 15%) or footer (bottom 15%)
+            in_header = rel_pos < 0.15
+            in_footer = rel_pos > 0.85
+            
+            if not (in_header or in_footer):
+                continue
+            
+            # Create a key based on approximate position and size
+            # Round to nearest 10 for tolerance
+            pos_key = (
+                round(img['y_position'] / 10) * 10,
+                round(img['width'] / 10) * 10,
+                round(img['height'] / 10) * 10
+            )
+            
+            if pos_key not in position_groups:
+                position_groups[pos_key] = []
+            
+            position_groups[pos_key].append(img)
+        
+        # Identify logos: images that appear on multiple pages (threshold: 50% of pages or at least 3 pages)
+        logos = []
+        threshold = max(3, total_pages * 0.5)
+        
+        for pos_key, images in position_groups.items():
+            if len(images) >= threshold:
+                logos.append({
+                    'y_position': pos_key[0],
+                    'width': pos_key[1],
+                    'height': pos_key[2],
+                    'count': len(images),
+                    'tolerance': 20  # Pixels tolerance for matching
+                })
+                logger.info(
+                    f"Detected logo pattern: position={pos_key[0]}, "
+                    f"size={pos_key[1]}x{pos_key[2]}, appears on {len(images)} pages"
+                )
+        
+        return logos
+    
+    def _is_logo_image(self, img: Dict, logos: List[Dict]) -> bool:
+        """
+        Check if an image matches a logo pattern.
+        
+        Args:
+            img: Image data with position and size
+            logos: List of detected logo patterns
+        
+        Returns:
+            True if image is a logo
+        """
+        for logo in logos:
+            # Check if position and size match within tolerance
+            pos_match = abs(img['y_position'] - logo['y_position']) < logo['tolerance']
+            width_match = abs(img['width'] - logo['width']) < logo['tolerance']
+            height_match = abs(img['height'] - logo['height']) < logo['tolerance']
+            
+            if pos_match and width_match and height_match:
+                return True
+        
+        return False
     
     def get_pdf_metadata(self, pdf_path: str) -> Dict:
         """

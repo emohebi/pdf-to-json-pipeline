@@ -41,7 +41,7 @@ def main():
         sys.exit(1)
     
     logger.info(f"Starting single document processing: {pdf_path.name}")
-    review_only = True
+    review_only = False
     try:
         pipeline = PDFToJSONPipeline()
         if not review_only:
