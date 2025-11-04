@@ -202,10 +202,9 @@ RULES FOR "text" FIELDS:
 - Preserve line breaks and formatting where relevant
 
 RULES FOR "image" FIELDS:
-- Provide a brief factual description of what the image shows
-- Example: "Warning triangle icon", "Photo of worker wearing hard hat", "Diagram showing valve assembly"
+- Extract text embedded in images
+- Example: Document shows image with text: "DANGER HIGH VOLTAGE" extract it exactly
 - If no image is present, use empty string: ""
-- DO NOT use generic placeholders like "image_1.png" or "N/A"
 
 RULES FOR EMPTY OR MISSING DATA:
 - Use empty string "" for text fields with no content
@@ -240,8 +239,8 @@ Correct: {{"text": "Step 1: Remove bolts A, B, and C", "image": ""}}
 Wrong: {{"text": "Remove the three bolts", "image": ""}}
 
 Document shows image with text: "DANGER HIGH VOLTAGE"
-Correct: {{"text": "DANGER HIGH VOLTAGE", "image": "Red warning sign with lightning bolt"}}
-Wrong: {{"text": "High voltage warning", "image": "warning.png"}}
+Correct: {{"text": "DANGER HIGH VOLTAGE", "image": ""}}
+Wrong: {{"text": "High voltage warning", "image": ""}}
 """
     
     def extract_section(
@@ -338,8 +337,8 @@ REQUIRED JSON STRUCTURE:
     "steps": [
       {{
         "step_no": {{"text": "Step number", "image": ""}},
-        "step_description": [{{"text": "Step instructions", "image": "Description of diagram if any"}}],
-        "photo_diagram": [{{"text": "Caption or label", "image": "Description of photo/diagram"}}],
+        "step_description": [{{"text": "Step instructions", "image": ""}}],
+        "photo_diagram": [{{"text": "Caption or label", "image": ""}}],
         "notes": [{{"text": "Note text", "image": ""}}],
         "acceptable_limit": [{{"text": "Limit specification", "image": ""}}],
         "question": [{{"text": "Question text", "image": ""}}],
@@ -366,7 +365,6 @@ CRITICAL REMINDER:
 - sequence_no and sequence_name appear ONCE per sequence
 - steps array contains all steps for that sequence
 - Copy text word-for-word from the section
-- For "image" fields: describe what the image shows (not a filename)
 - Use empty string "" for missing data, never use "N/A"
 - Extract only information from section "{section_info['section_name']}" until next section: "{next_section_name}"
 - Do not repeat sequence_name and sequence_no from if it spreads across multiple pages
@@ -397,7 +395,6 @@ CRITICAL REMINDER:
 - Do not start from the top of the pages only extract information below the section until next section
 - Copy text word-for-word from the section
 - Preserve original order, spelling, capitalization, and punctuation
-- For "image" fields: describe what the image shows (not a filename)
 - Use empty string "" for missing data, never use "N/A" or placeholder text
 - Return ONLY the JSON, no markdown code blocks or extra text
 
