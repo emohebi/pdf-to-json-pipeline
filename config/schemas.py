@@ -1,6 +1,7 @@
 """
 Document and section schemas definition.
 Customized for safety procedure documents.
+FIXED: task_activities now uses proper hierarchical structure (sequences contain steps)
 """
 from typing import Dict, Any
 
@@ -65,20 +66,24 @@ SECTION_SCHEMAS: Dict[str, Dict[str, Any]] = {
     "attached_images": [{"text": "", "image": ""}],
     "task_activities": [
         {
-            "equipment_asset": {},
-            "sequence_no": {},
+            "sequence_no": {"text": ""},
             "sequence_name": {"text": ""},
+            "equipment_asset": {"text": ""},
             "maintainable_item": [{"text": ""}],
-            "lmi": [],
-            "step_no": {"text": "", "image": ""},
-            "step_description": [{"text":"", "image": ""}],
-            "photo_diagram": [],
-            "notes": [],
-            "acceptable_limit": [{"text":"", "image":""}],
-            "question": [],
-            "corrective_action": [],
-            "execution_condition": {"text":"", "image":""},
-            "other_content": []
+            "lmi": [{"text": ""}],
+            "steps": [
+                {
+                    "step_no": {"text": "", "image": ""},
+                    "step_description": [{"text": "", "image": ""}],
+                    "photo_diagram": [{"text": "", "image": ""}],
+                    "notes": [{"text": "", "image": ""}],
+                    "acceptable_limit": [{"text": "", "image": ""}],
+                    "question": [{"text": "", "image": ""}],
+                    "corrective_action": [{"text": "", "image": ""}],
+                    "execution_condition": {"text": "", "image": ""},
+                    "other_content": [{"text": "", "image": ""}]
+                }
+            ]
         }
     ],
     "general": [

@@ -26,10 +26,11 @@ class PDFToJSONPipeline:
         self.storage = StorageManager()
         self.review_agent = ReviewAgent()
 
-    def review_json(self, section_jsons: str, document_id = None):
+    def call_review_agent(self, section_jsons: str, document_id = None, pages_data: List[Dict] = None):
         review_results = self.review_agent.review_document(
             section_jsons=section_jsons,
-            document_id=document_id
+            document_id=document_id,
+            pages_data=pages_data  # Pass pages_data to review agent
         )
         
         # Log review summary
@@ -46,6 +47,7 @@ class PDFToJSONPipeline:
             logger.warning(f"    - Incomplete sentences: {len(review_results.get('incomplete_sentences', []))}")
             logger.warning(f"    - Duplications: {len(review_results.get('duplications', []))}")
             logger.warning(f"    - Order issues: {len(review_results.get('order_issues', []))}")
+            logger.warning(f"    - Missing information: {len(review_results.get('missing_information', []))}")
         return review_results, total_issues
     
     def process_single_pdf(self, pdf_path: str, parallel: bool = False, review_json: str = None) -> Dict:
@@ -95,9 +97,10 @@ class PDFToJSONPipeline:
             logger.info(f"Extracted {len(section_jsons)} sections")
 
             logger.info("STAGE 3.5: Reviewing extracted content...")
-            review_results, total_issues = self.review_json(
+            review_results, total_issues = self.call_review_agent(
                 section_jsons=section_jsons,
-                document_id=document_id
+                document_id=document_id,
+                pages_data=pages_data  # Pass pages_data for section-by-section review
             )
             
             # STAGE 4: Validate and combine
@@ -189,40 +192,47 @@ class PDFToJSONPipeline:
             next_section_name = "<END OF DOCUMENT>"
             if idx < len(sections):
                 next_section_name = sections[idx]['section_name']
-            
-            try:
-                logger.info(f"  [{idx}/{len(sections)}] Extracting: {section_name}")
-                
-                # Get pages for this section
-                start_idx = section['start_page'] - 1
-                end_idx = section['end_page']
-                section_pages = pages_data[start_idx:end_idx]
-                
-                # Get schema for this section type
-                section_schema = get_section_schema(section['section_type'])
-                
-                # Create extractor
-                extractor = SectionExtractionAgent(section_schema)
-                
-                # Extract section
-                section_json = extractor.extract_section(
-                    section_pages,
-                    section,
-                    next_section_name,
-                    document_id
-                )
-                
-                section_jsons.append(section_json)
-                
-                # Log confidence if available
-                if '_metadata' in section_json:
-                    confidence = section_json['_metadata'].get('confidence', 0)
-                    logger.info(f"  [{idx}/{len(sections)}] Completed: {section_name} (confidence: {confidence:.2f})")
-                else:
-                    logger.info(f"  [{idx}/{len(sections)}] Completed: {section_name}")
-                
-            except Exception as e:
-                logger.error(f"Failed to extract {section_name}: {e}")
+            counter = 3
+            loop = True
+            while loop:
+                loop = False
+                try:
+                    logger.info(f"  [{idx}/{len(sections)}] Extracting: {section_name}")
+                    
+                    # Get pages for this section
+                    start_idx = section['start_page'] - 1
+                    end_idx = section['end_page']
+                    section_pages = pages_data[start_idx:end_idx]
+                    
+                    # Get schema for this section type
+                    section_schema = get_section_schema(section['section_type'])
+                    
+                    # Create extractor
+                    extractor = SectionExtractionAgent(section_schema)
+                    
+                    # Extract section
+                    section_json = extractor.extract_section(
+                        section_pages,
+                        section,
+                        next_section_name,
+                        document_id
+                    )
+                    
+                    section_jsons.append(section_json)
+                    
+                    # Log confidence if available
+                    if '_metadata' in section_json:
+                        confidence = section_json['_metadata'].get('confidence', 0)
+                        logger.info(f"  [{idx}/{len(sections)}] Completed: {section_name} (confidence: {confidence:.2f})")
+                    else:
+                        logger.info(f"  [{idx}/{len(sections)}] Completed: {section_name}")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to extract {section_name}: {e}")
+                    if counter > 0:
+                        logger.info(f"Trying {counter} more time ...")
+                        counter -= 1
+                        loop = True
                 # Continue with next section
         
         return section_jsons

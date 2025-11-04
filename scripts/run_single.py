@@ -32,18 +32,19 @@ def main():
     
     args = parser.parse_args()
     args.pdf = "./input/0025772.pdf"
-    args.pdf = "./output/20251103_104937/final/0025772.json"
+    args.json = "./input/0025772.json"
     # Validate PDF exists
     pdf_path = Path(args.pdf)
+    json_path = Path(args.json)
     if not pdf_path.exists():
         logger.error(f"PDF file not found: {pdf_path}")
         sys.exit(1)
     
     logger.info(f"Starting single document processing: {pdf_path.name}")
-    
+    review_only = True
     try:
         pipeline = PDFToJSONPipeline()
-        if ".pdf" in str(pdf_path):
+        if not review_only:
             result = pipeline.process_single_pdf(str(pdf_path))
             
             logger.info("Processing successful")
@@ -51,9 +52,12 @@ def main():
             logger.info(f"Confidence: {result['metadata']['confidence_score']:.2f}")
         else:
             import json
-            with open(str(pdf_path), 'r') as file:
+            with open(str(json_path), 'r') as file:
                 json_ = json.load(file)
-            pipeline.review_json(json_['sections'], "doc_id")
+            logger.info("STAGE 1: Extracting PDF pages...")
+            pages_data = pipeline.pdf_processor.pdf_to_images(str(pdf_path), extract_with_bedrock=False)
+            logger.info(f"Extracted {len(pages_data)} pages")
+            pipeline.call_review_agent(json_['sections'], "doc_id", pages_data=pages_data)
         
     except Exception as e:
         logger.error(f"Processing failed: {e}")

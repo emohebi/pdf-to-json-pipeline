@@ -1,6 +1,7 @@
 """
 Stage 2: Section Extraction Agent - Exact Text Extraction Version
 Extracts structured data from document sections with EXACT text preservation.
+FIXED: task_activities now uses proper hierarchical structure (sequence -> steps)
 """
 import json
 import re
@@ -257,7 +258,12 @@ Wrong: {{"text": "High voltage warning", "image": "warning.png"}}
         
         try:
             images_b64 = prepare_images_for_bedrock(section_pages)
-            prompt = self._build_extraction_prompt(section_info, next_section_name)
+            
+            # Use special prompt for task_activities section
+            if section_info['section_type'] == 'task_activities':
+                prompt = self._build_task_activities_prompt(section_info, next_section_name)
+            else:
+                prompt = self._build_extraction_prompt(section_info, next_section_name)
             
             response = invoke_bedrock_multimodal(
                 images=images_b64,
@@ -282,8 +288,6 @@ Wrong: {{"text": "High voltage warning", "image": "warning.png"}}
                 'data': section_json,  # Can be list or dict
                 '_metadata': {
                     'section_type': section_info['section_type'],
-                    # 'section_name': section_info['section_name'],
-                    # 'page_range': [section_info['start_page'], section_info['end_page']],
                     'confidence': confidence,
                     'quality_issues': issues
                 }
@@ -310,6 +314,75 @@ Wrong: {{"text": "High voltage warning", "image": "warning.png"}}
             )
             raise
     
+    def _build_task_activities_prompt(self, section_info: Dict, next_section_name: str = None) -> str:
+        """Build specialized prompt for task_activities section with hierarchical structure."""
+        return f"""Extract all information from this TASK ACTIVITIES section into JSON format.
+
+Section: {section_info['section_name']} ({section_info['section_type']})
+Pages: {section_info['start_page']} to {section_info['end_page']}
+
+IMPORTANT - HIERARCHICAL STRUCTURE:
+Task activities are organized as SEQUENCES containing STEPS:
+- Each SEQUENCE has: sequence_no, sequence_name, equipment_asset, maintainable_item, lmi
+- Each SEQUENCE contains multiple STEPS
+- Each STEP has: step_no, step_description, photo_diagram, notes, acceptable_limit, question, corrective_action, execution_condition, other_content
+
+REQUIRED JSON STRUCTURE:
+[
+  {{
+    "sequence_no": {{"text": "Sequence number"}},
+    "sequence_name": {{"text": "Sequence title"}},
+    "equipment_asset": {{"text": "Equipment/asset name if any"}},
+    "maintainable_item": [{{"text": "Item description"}}],
+    "lmi": [{{"text": "LMI information if any"}}],
+    "steps": [
+      {{
+        "step_no": {{"text": "Step number", "image": ""}},
+        "step_description": [{{"text": "Step instructions", "image": "Description of diagram if any"}}],
+        "photo_diagram": [{{"text": "Caption or label", "image": "Description of photo/diagram"}}],
+        "notes": [{{"text": "Note text", "image": ""}}],
+        "acceptable_limit": [{{"text": "Limit specification", "image": ""}}],
+        "question": [{{"text": "Question text", "image": ""}}],
+        "corrective_action": [{{"text": "Action to take", "image": ""}}],
+        "execution_condition": {{"text": "Condition for execution", "image": ""}},
+        "other_content": [{{"text": "Any other relevant content", "image": ""}}]
+      }},
+      {{
+        "step_no": {{"text": "Next step number", "image": ""}},
+        ...
+      }}
+    ]
+  }},
+  {{
+    "sequence_no": {{"text": "Next sequence number"}},
+    "sequence_name": {{"text": "Next sequence title"}},
+    ...
+  }}
+]
+
+CRITICAL REMINDER:
+- Extract ALL text EXACTLY as written below the section "{section_info['section_name']}" but before next section: "{next_section_name}" - do not paraphrase or reword
+- DO NOT repeat sequence_no and sequence_name for each step
+- sequence_no and sequence_name appear ONCE per sequence
+- steps array contains all steps for that sequence
+- Copy text word-for-word from the section
+- For "image" fields: describe what the image shows (not a filename)
+- Use empty string "" for missing data, never use "N/A"
+- Extract only information from section "{section_info['section_name']}" until next section: "{next_section_name}"
+- Do not repeat sequence_name and sequence_no from if it spreads across multiple pages
+
+EXTRACTION STEPS:
+1. Look at ALL pages shown ({section_info['start_page']} to {section_info['end_page']})
+2. Identify sequences in the section (look for sequence numbers/titles)
+3. For each sequence, identify all its steps
+4. Extract sequence-level information once
+5. Extract all steps under that sequence
+6. Structure according to the hierarchical JSON format above
+
+
+Return the complete JSON array now (start with [, no markdown):
+"""
+    
     def _build_extraction_prompt(self, section_info: Dict, next_section_name: str = None) -> str:
         return f"""Extract all information from this document section into JSON format.
 
@@ -330,12 +403,12 @@ CRITICAL REMINDER:
 
 EXTRACTION STEPS:
 1. Look at ALL pages shown ({section_info['start_page']} to {section_info['end_page']})
-2. Identify all text in the section {section_info['section_name']} (including text in images) util you reach the next section: {next_section_name}
-3. Extract each piece of text EXACTLY as it appears (DO NOT not duplicate the information if the section is across two pages)
+2. Identify all text in the section {section_info['section_name']} (including text in images) until you reach the next section: {next_section_name}
+3. Extract each piece of text EXACTLY as it appears (DO NOT duplicate the information if the section is across two pages)
 4. Structure strictly according to the schema above
 5. Extract text from images if image is available
 6. All text which you think should go under "other_content" key please put them under "notes" key in the JSON format
-6. Populate all the related values in the above JSON schema based on the section's text, if no related inforamtion available for a particular key in the schema then leave it as "".
+7. Populate all the related values in the above JSON schema based on the section's text, if no related information available for a particular key in the schema then leave it as "".
 
 Return the complete JSON object now (start with {{ or [, no markdown):
 """
@@ -359,3 +432,4 @@ Return the complete JSON object now (start with {{ or [, no markdown):
             
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse extraction response: {e}")
+            raise

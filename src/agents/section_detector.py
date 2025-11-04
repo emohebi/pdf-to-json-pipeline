@@ -1,7 +1,7 @@
 """
 Stage 1: Section Detection Agent - Batch Processing Version
 Processes ALL pages in batches of 20, no sampling.
-FIXED: Now extracts EXACT section names from document headings.
+FIXED: Distinguishes between SECTIONS (document-level headings) and SEQUENCES (numbered task steps)
 """
 import json
 from typing import List, Dict
@@ -300,9 +300,22 @@ class SectionDetectionAgent:
         sample_pages: List[Dict]
     ) -> str:
         """Build prompt for single batch detection."""
-        return f"""Analyze ALL pages of this document and identify logical sections.
+        return f"""Analyze ALL pages of this document and identify logical DOCUMENT SECTIONS.
 
 Total pages shown: {len(sample_pages)}
+
+IMPORTANT - UNDERSTAND THE DIFFERENCE:
+1. DOCUMENT SECTIONS (what you should identify):
+   - These are major document divisions with descriptive headings
+   - Examples: "SAFETY", "Material Risks and Controls", "Additional PPE Required", "Reference Documentation"
+   - These headings are usually styled differently (bold, larger font, different color, underlined)
+   - They divide the document into major logical parts
+
+2. NUMBERED SEQUENCES (what you should IGNORE):
+   - These are numbered steps or tasks WITHIN a section
+   - Examples: "1 JOB PREPARATION", "2 INSPECTION PROCEDURE", "3 POST-WORK CHECKS"
+   - These appear INSIDE the "Task Activities" section
+   - DO NOT treat these as separate sections
 
 CRITICAL: Extract section names EXACTLY as they appear in the document headings/titles.
 
@@ -321,20 +334,27 @@ Return ONLY a JSON array with this exact structure:
 """ + f"""
 
 CRITICAL RULES:
-1. section_name MUST be the EXACT text of the section heading from the document
-2. DO NOT create descriptive names - copy the heading verbatim
-3. Examples:
-   - If you see "2.1 Material Risks and Controls" → use "2.1 Material Risks and Controls"
-   - If you see "SAFETY" → use "SAFETY"
-   - If you see "Additional PPE Required" → use "Additional PPE Required"
-   - DO NOT use names like "Safety Information Section" or "Risk Management"
-4. If no heading is visible, use "Untitled Section [page X]"
+1. section_name MUST be the EXACT text of the DOCUMENT SECTION heading
+2. DO NOT treat numbered sequences (like "1 JOB PREPARATION") as sections
+3. Numbered sequences belong INSIDE the "Task Activities" section
+4. Look for major document divisions, not task steps
+5. Examples of CORRECT section identification:
+   - "SAFETY" (a document section)
+   - "Material Risks and Controls" (a document section)
+   - "Task Activities" (a document section that contains numbered sequences)
+   - "Additional PPE Required" (a document section)
+6. Examples of INCORRECT section identification:
+   - "1 JOB PREPARATION" ❌ (this is a sequence, not a section)
+   - "2 OPERATION" ❌ (this is a sequence, not a section)
+   - "Step 1" ❌ (this is a step, not a section)
+7. If no heading is visible, use "Untitled Section [page X]"
 
 Requirements:
 - Sections must not overlap
 - All pages must be covered
 - Use proper section types from the list
 - Be precise with page numbers
+- Focus on DOCUMENT-LEVEL divisions, not task-level sequences
 
 Return the JSON array now, no other text:
 """
@@ -349,30 +369,44 @@ Return the JSON array now, no other text:
         """Build prompt for batch detection."""
         num_pages_in_batch = len(batch_pages)
         
-        return f"""Analyze this PORTION of a larger document and identify sections within it.
+        return f"""Analyze this PORTION of a larger document and identify DOCUMENT SECTIONS within it.
 
 CONTEXT:
 - Total document pages: {total_pages}
 - This batch shows: pages {start_page} to {end_page} ({num_pages_in_batch} pages)
 - You are seeing pages {start_page}-{end_page} of the complete document
 
-YOUR TASK:
-Identify sections that START and/or END within pages {start_page}-{end_page}.
-Extract the EXACT section headings/titles as they appear in the document.
+IMPORTANT - UNDERSTAND THE DIFFERENCE:
+1. DOCUMENT SECTIONS (what you should identify):
+   - These are major document divisions with descriptive headings
+   - Examples: "SAFETY", "Material Risks and Controls", "Additional PPE Required"
+   - These headings are usually styled differently (bold, larger font, different color)
+   - They divide the document into major logical parts
 
-CRITICAL: section_name must be the EXACT text from the document heading, NOT a description.
+2. NUMBERED SEQUENCES (what you should IGNORE):
+   - These are numbered steps or tasks WITHIN a section
+   - Examples: "1 JOB PREPARATION", "2 INSPECTION", "3 POST-WORK"
+   - These appear INSIDE the "Task Activities" section
+   - DO NOT treat these as separate sections
+
+YOUR TASK:
+Identify DOCUMENT SECTIONS that START and/or END within pages {start_page}-{end_page}.
+Extract the EXACT section headings/titles as they appear in the document.
+IGNORE numbered sequences - they are not sections.
+
+CRITICAL: section_name must be the EXACT text from the DOCUMENT SECTION heading, NOT a numbered sequence.
 Examples:
-- Document heading says "Material Risks and Controls" → section_name: "Material Risks and Controls"
-- Document heading says "3.2 SAFETY" → section_name: "3.2 SAFETY"
-- Document heading says "Task Activities" → section_name: "Task Activities"
-- DO NOT use descriptive names like "Safety Section" or "Risk Management Information"
+- Document shows section heading "Material Risks and Controls" → section_name: "Material Risks and Controls" ✓
+- Document shows section heading "Task Activities" → section_name: "Task Activities" ✓
+- Document shows numbered item "1 JOB PREPARATION" → IGNORE IT, it's not a section ✗
+- Document shows numbered item "2 OPERATION" → IGNORE IT, it's not a section ✗
 
 """+"""
 Return ONLY a JSON array with this exact structure:
 [
     {
         "section_type": "one of: """+f"""{', '.join(self.section_definitions.keys())}"""+""",
-        "section_name": "EXACT heading text from document",
+        "section_name": "EXACT section heading text from document (not numbered sequences)",
         "start_page": number ("""+f"""{start_page}-{end_page}"""+"""),
         "end_page": number ("""+f"""{start_page}-{end_page}"""+"""),
         "confidence": number (0.0-1.0)
@@ -385,7 +419,8 @@ RULES:
 - If a section starts before {start_page}, use {start_page} as start_page
 - If a section ends after {end_page}, use {end_page} as end_page
 - All pages {start_page}-{end_page} must be covered
-- section_name MUST be the exact heading text, not a description
+- section_name MUST be the exact SECTION heading text, not numbered sequences
+- Numbered sequences (1 JOB PREP, 2 OPERATION, etc.) are NOT sections
 
 Return the JSON array now, no other text:
 """
