@@ -29,19 +29,23 @@ SECTION_DEFINITIONS = {
 # ============================================================================
 
 SECTION_SCHEMAS: Dict[str, Dict[str, Any]] = {
-    "safety": [
-        {"safety_icon": {"text": "", "image": ""}},
-        {"safety_statement": [{"text": "", "image": ""}]},
-        {"safety_additional": [{"seq": "", "text" : ""}]}
-    ],
+    "safety": {
+        "safety_icon": {"text": "", "image": ""},
+        "safety_statement": [{"text": "", "image": ""}],
+        "safety_additional": [{"seq": "", "text" : ""}]
+    },
     "material_risks_and_controls": [
-        {"risk": {"text": "", "image": ""}},
-        {"risk_description": {"text": "", "image": ""}},
-        {"critical_controls": [{"text": "", "image": ""}]}
+        {
+            "risk": {"text": "", "image": ""},
+            "risk_description": {"text": "", "image": ""},
+            "critical_controls": [{"text": "", "image": ""}]
+        }
     ],
     "additional_controls_required": [
-        {"control_type": {"text": "", "image": ""}},
-        {"reason_for_control": [{"text": "", "image": ""}]}
+        {
+            "control_type": {"text": "", "image": ""},
+            "reason_for_control": [{"text": "", "image": ""}]
+        }
     ],
     "additional_ppe_required": [
         {"text": "", "image": ""}
@@ -50,12 +54,16 @@ SECTION_SCHEMAS: Dict[str, Dict[str, Any]] = {
         {"text": "", "image": ""}
     ],
     "tooling_equipment_required": [
-        {"tool_set": {"text": ""}},
-        {"tools": [{"text": ""}]}
+        {
+            "tool_set": {"text": ""},
+            "tools": [{"text": ""}]
+        }
     ],
     "reference_documentation": [
-        {"document_reference_number": {"text": "", "image": ""}},
-        {"document_description": {"text": "", "image": ""}}
+        {
+            "document_reference_number": {"text": "", "image": ""},
+            "document_description": {"text": "", "image": ""}
+        }
     ],
     "reference_drawings": [
         {

@@ -44,7 +44,17 @@ class ValidationAgent:
             'sections': section_jsons,
             'validation_status': 'pending'
         }
-        
+
+        document_json_no_meta = {}
+        document_json_no_meta["document_id"] = document_id
+        document_json_no_meta["document_header"] = {"sections": [s["section_name"] for s in section_jsons]}
+        for s in section_jsons:
+            section_type = s.get('_metadata', {}).get('section_type')
+            if section_type in document_json_no_meta:
+                document_json_no_meta[section_type].extend(s['data'])
+            else:
+                document_json_no_meta[section_type] = s['data']        
+
         # Validate structure
         is_valid, errors = validate_document_structure(document_json)
         
@@ -74,6 +84,7 @@ class ValidationAgent:
         else:
             # Save to final output
             self.storage.save_final_json(document_id, document_json)
+            self.storage.save_final_json(f"{document_id}_org", document_json_no_meta)
             logger.info(f"[{document_id}] Validation passed, saved to final")
         
         return document_json

@@ -61,7 +61,7 @@ VERBOSE = os.getenv('VERBOSE', 'True').lower() == 'true'
 # Model parameters
 MODEL_TEMPERATURE = 0  # Deterministic for extraction
 MODEL_MAX_TOKENS_DETECTION = 4096
-MODEL_MAX_TOKENS_EXTRACTION = 16000
+MODEL_MAX_TOKENS_EXTRACTION = 26000
 MODEL_MAX_TOKENS_VALIDATION = 8192
 
 # Processing modes

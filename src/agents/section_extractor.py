@@ -180,6 +180,15 @@ Your task:
 5. Structure the data according to the provided JSON schema
 6. Be thorough - don't miss any information
 
+CRITICAL RULES FOR SCHEMA PRESERVATION:
+✓ ALWAYS include EVERY key from the provided schema
+✓ NEVER omit fields, even if they are empty
+✓ NEVER add fields that aren't in the schema
+✓ NEVER rename or modify field names
+✓ Use appropriate empty values for missing data:
+  - String fields: ""
+  - Object fields: include all subfields with empty values
+
 CRITICAL RULES FOR TEXT EXTRACTION:
 ✓ Copy text EXACTLY word-for-word from the document
 ✓ Preserve ALL original text including:
@@ -208,7 +217,11 @@ RULES FOR "image" FIELDS:
 
 RULES FOR EMPTY OR MISSING DATA:
 - Use empty string "" for text fields with no content
-- Use empty array [] for array fields with no items
+- Empty object with "text" property: {{"text": ""}}
+- Empty object with "text" and "image" properties: {{"text": "", "image": ""}}
+- Empty array of objects with "text" property: [{{"text": ""}}]
+- Empty array of objects with "text" and "image" properties: [{{"text": "", "image": ""}}]
+- But the field MUST STILL BE PRESENT
 - DO NOT use null, "N/A", "Unknown", or any placeholder text
 - If a section doesn't exist, return the minimum valid structure
 
@@ -217,6 +230,8 @@ Schema to follow:
 
 OUTPUT FORMAT:
 - Return ONLY valid JSON matching the schema exactly
+- Include EVERY field from the schema
+- Use empty values, never omit fields
 - No markdown code blocks (no ```json```)
 - No additional text, explanations, or comments
 - Start directly with {{ or [
@@ -284,6 +299,8 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
             )
             
             section_json = self._parse_extraction_response(response)
+
+            # section_json = self._validate_and_fix_schema(section_json, self.section_schema)
             
             # Rest of the method remains the same...
             confidence, issues = calculate_confidence_score(
@@ -387,6 +404,16 @@ REQUIRED JSON STRUCTURE:
   }}
 ]
 
+CRITICAL PRESERVATION RULES FOR TASK ACTIVITIES:
+1. EVERY STEP MUST HAVE ALL FIELDS listed in the schema
+2. NEVER omit fields even if they are empty in the document
+3. Empty fields should use appropriate empty values:
+   - Empty object with "text" property: {{"text": ""}}
+   - Empty object with "text" and "image" properties: {{"text": "", "image": ""}}
+   - Empty array of objects with "text" property: [{{"text": ""}}]
+   - Empty array of objects with "text" and "image" properties: [{{"text": "", "image": ""}}]
+   - But the field MUST STILL BE PRESENT
+
 CRITICAL REMINDER:
 - Extract ALL text EXACTLY as written below the section "{section_info['section_name']}" but before next section: "{next_section_name}" - do not paraphrase or reword
 - DO NOT repeat sequence_no and sequence_name for each step
@@ -440,6 +467,23 @@ Return the complete JSON array now (start with [, no markdown):
     REQUIRED JSON SCHEMA:
     {json.dumps(self.section_schema, indent=2)}
 
+    CRITICAL SCHEMA PRESERVATION RULES:
+    1. YOU MUST INCLUDE EVERY KEY shown in the schema above
+    2. YOU MUST PRESERVE THE EXACT STRUCTURE - do not add, remove, or rename ANY keys
+    3. For EVERY field in the schema:
+    - If you find matching content → populate with the EXACT text
+    - If no matching content exists → use the default empty value
+    4. NEVER SKIP OR OMIT ANY KEY from the schema, even if empty
+
+    DEFAULT VALUES FOR EMPTY FIELDS:
+    - For string fields → use empty string: ""
+    - Empty object with "text" property: {{"text": ""}}
+    - Empty object with "text" and "image" properties: {{"text": "", "image": ""}}
+    - Empty array of objects with "text" property: [{{"text": ""}}]
+    - Empty array of objects with "text" and "image" properties: [{{"text": "", "image": ""}}]
+    - But the field MUST STILL BE PRESENT
+    - NEVER use null, undefined, or omit the field
+
     CRITICAL REMINDER:
     - Extract ALL text EXACTLY as written below the section "{section_info['section_name']}" but before next section: "{next_section_name}" - do not paraphrase or reword
     - For "image" fields: Use the image paths provided above when you see corresponding images
@@ -484,3 +528,74 @@ Return the complete JSON array now (start with [, no markdown):
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse extraction response: {e}")
             raise
+
+    def _validate_and_fix_schema(self, extracted_json: Any, expected_schema: Any) -> Any:
+        """
+        Validate extracted JSON against schema and add missing keys.
+        This is a safety net in case the LLM still omits keys.
+        """
+        if isinstance(expected_schema, list) and len(expected_schema) > 0:
+            # Schema is an array, get the template item
+            template = expected_schema[0]
+            
+            if isinstance(extracted_json, list):
+                # Fix each item in the array
+                fixed_items = []
+                for item in extracted_json:
+                    if isinstance(item, dict) and isinstance(template, dict):
+                        fixed_item = self._fix_dict_schema(item, template)
+                        fixed_items.append(fixed_item)
+                    else:
+                        fixed_items.append(item)
+                return fixed_items
+            else:
+                # Expected array but got something else, return with template structure
+                return []
+        
+        elif isinstance(expected_schema, dict) and isinstance(extracted_json, dict):
+            return self._fix_dict_schema(extracted_json, expected_schema)
+        
+        return extracted_json
+
+    def _fix_dict_schema(self, data: Dict, template: Dict) -> Dict:
+        """
+        Ensure all keys from template exist in data.
+        """
+        fixed = {}
+        
+        for key, template_value in template.items():
+            if key in data:
+                # Key exists, recursively fix if needed
+                if isinstance(template_value, dict) and isinstance(data[key], dict):
+                    fixed[key] = self._fix_dict_schema(data[key], template_value)
+                elif isinstance(template_value, list) and len(template_value) > 0:
+                    if isinstance(data[key], list):
+                        # Fix each item in the list
+                        fixed_items = []
+                        item_template = template_value[0]
+                        for item in data[key]:
+                            if isinstance(item, dict) and isinstance(item_template, dict):
+                                fixed_items.append(self._fix_dict_schema(item, item_template))
+                            else:
+                                fixed_items.append(item)
+                        fixed[key] = fixed_items
+                    else:
+                        fixed[key] = []  # Empty array if wrong type
+                else:
+                    fixed[key] = data[key]
+            else:
+                # Key missing, add with empty value based on template
+                if isinstance(template_value, dict):
+                    # For dict, recursively create empty structure
+                    if "text" in template_value and "image" in template_value:
+                        fixed[key] = {"text": "", "image": ""}
+                    else:
+                        fixed[key] = self._fix_dict_schema({}, template_value)
+                elif isinstance(template_value, list):
+                    fixed[key] = []  # Empty array
+                elif isinstance(template_value, str):
+                    fixed[key] = ""  # Empty string
+                else:
+                    fixed[key] = template_value  # Use template value
+        
+        return fixed
