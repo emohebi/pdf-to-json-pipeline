@@ -2,6 +2,7 @@
 Stage 2: Section Extraction Agent - Exact Text Extraction Version
 Extracts structured data from document sections with EXACT text preservation.
 FIXED: task_activities now uses proper hierarchical structure (sequence -> steps)
+ENHANCED: Better handling of graphical elements and multiple images
 """
 import json
 import re
@@ -354,10 +355,32 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
             for desc, path in image_descriptions.items():
                 image_info += f"- {desc}: {path}\\n"
             image_info += """
-    \\nFOR PHOTO/DIAGRAM FIELDS:
-    - When you see a diagram or photo for a step, identify what it shows
-    - Match it to the description above
-    - Use in photo_diagram: [{"text": "caption", "image": "path_from_above"}]
+    \\nCRITICAL RULES FOR IMAGES AND GRAPHICAL ELEMENTS:
+    1. STEP DESCRIPTION field:
+       - Contains the main textual instructions for the step
+       - Small inline icons/symbols that are part of the text flow stay here
+       - For graphical elements in step description: extract any embedded text (not describe the icon)
+       - If multiple small icons exist, create separate list entries for each
+    
+    2. PHOTO/DIAGRAM field:
+       - ONLY for actual photos, diagrams, or larger illustrations
+       - NOT for small icons or symbols that are part of step text
+       - Typically shows equipment, assembly diagrams, or reference photos
+       - Each distinct photo/diagram should be a separate list entry
+    
+    3. TEXT EXTRACTION from graphical elements:
+       - Extract any TEXT visible INSIDE icons/images (e.g., "HOLD POINT" text in a flame icon)
+       - Do NOT describe what the icon looks like
+       - If no text is embedded in the graphical element, use empty string ""
+    
+    4. MULTIPLE ELEMENTS:
+       - If multiple icons/images exist, create SEPARATE list entries for each
+       - Do not combine multiple elements into one entry
+       
+    5. NOTES field:
+       - Extract ALL notes, including those shown as graphical text elements
+       - If "Notes" appears as a graphical element, extract the text content
+       - Multiple notes = multiple list entries
 """
         
         return f"""Extract all information from this TASK ACTIVITIES section into JSON format.
@@ -371,6 +394,7 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
     - Each SEQUENCE has: sequence_no, sequence_name, equipment_asset, maintainable_item, lmi
     - Each SEQUENCE contains multiple STEPS
     - Each STEP has: step_no, step_description, photo_diagram, notes, acceptable_limit, question, corrective_action, execution_condition, other_content.
+
 REQUIRED JSON STRUCTURE:
 [
   {{
@@ -390,48 +414,59 @@ REQUIRED JSON STRUCTURE:
         "corrective_action": [{{"text": "Action to take", "image": ""}}],
         "execution_condition": {{"text": "Condition for execution", "image": ""}},
         "other_content": [{{"text": "Any other relevant content", "image": ""}}]
-      }},
-      {{
-        "step_no": {{"text": "Next step number", "image": ""}},
-        ...
       }}
     ]
-  }},
-  {{
-    "sequence_no": {{"text": "Next sequence number"}},
-    "sequence_name": {{"text": "Next sequence title"}},
-    ...
   }}
 ]
 
-CRITICAL PRESERVATION RULES FOR TASK ACTIVITIES:
-1. EVERY STEP MUST HAVE ALL FIELDS listed in the schema
-2. NEVER omit fields even if they are empty in the document
-3. Empty fields should use appropriate empty values:
-   - Empty object with "text" property: {{"text": ""}}
-   - Empty object with "text" and "image" properties: {{"text": "", "image": ""}}
-   - Empty array of objects with "text" property: [{{"text": ""}}]
-   - Empty array of objects with "text" and "image" properties: [{{"text": "", "image": ""}}]
-   - But the field MUST STILL BE PRESENT
+CRITICAL RULES FOR FIELD POPULATION:
 
-CRITICAL REMINDER:
-- Extract ALL text EXACTLY as written below the section "{section_info['section_name']}" but before next section: "{next_section_name}" - do not paraphrase or reword
-- DO NOT repeat sequence_no and sequence_name for each step
-- sequence_no and sequence_name appear ONCE per sequence
-- steps array contains all steps for that sequence
-- Copy text word-for-word from the section
-- Use empty string "" for missing data, never use "N/A"
-- Extract only information from section "{section_info['section_name']}" until next section: "{next_section_name}"
-- Do not repeat sequence_name and sequence_no from if it spreads across multiple pages
+1. step_description field:
+   - Main text instructions for the step go here
+   - Small inline icons/symbols that appear within step text: include each as separate list entry
+   - For each icon: extract EMBEDDED TEXT only (e.g., "HOLD POINT" if visible in icon), not description
+   - Multiple icons = multiple list entries [{{"text": "main instruction", "image": ""}}, {{"text": "HOLD POINT", "image": "path1"}}, {{"text": "QA", "image": "path2"}}]
+   - Do NOT describe icons (wrong: "flame icon", correct: extract text inside icon or "")
+
+2. photo_diagram field:
+   - ONLY actual photographs, technical diagrams, or illustrations
+   - NOT small icons or symbols from step description
+   - Each photo/diagram as separate entry: [{{"text": "diagram caption", "image": "path1"}}, {{"text": "photo caption", "image": "path2"}}]
+   - Leave empty [] if no actual photos/diagrams for the step
+
+3. notes field:
+   - Extract ALL notes, including those shown as graphical text elements
+   - If "Notes" appears as a graphical element, extract the text content from inside it
+   - Multiple notes = multiple list entries
+   - Do NOT skip notes even if they appear as images
+
+4. Text extraction from graphical elements:
+   - Extract TEXT EMBEDDED in the graphical element (what's written inside it)
+   - DO NOT describe the graphical element (wrong: "flame icon", correct: "HOLD POINT" if that text is in the icon)
+   - If no text inside the graphical element, use empty string ""
+
+5. Multiple elements handling:
+   - ALWAYS create separate list entries for distinct elements
+   - Do not combine multiple icons/images/text blocks into one entry
+   - Each icon, each image, each text block = separate list entry
+
+6. PRESERVATION RULES:
+   - EVERY STEP MUST HAVE ALL FIELDS listed in the schema
+   - NEVER omit fields even if they are empty in the document
+   - Empty fields should use appropriate empty values as shown above
+   - But the field MUST STILL BE PRESENT
 
 EXTRACTION STEPS:
 1. Look at ALL pages shown ({section_info['start_page']} to {section_info['end_page']})
-2. Identify sequences in the section (look for sequence numbers/titles)
-3. For each sequence, identify all its steps
-4. Extract sequence-level information once
-5. Extract all steps under that sequence
-6. Structure according to the hierarchical JSON format above
-
+2. Identify sequences in the section
+3. For each step, carefully distinguish:
+   - Main text instructions (step_description)
+   - Inline icons/symbols with embedded text (step_description as separate entries)
+   - Actual photos/diagrams (photo_diagram)
+   - Notes including graphical notes (extract text, not describe)
+4. Extract embedded text from graphical elements, not descriptions
+5. Create separate list entries for multiple elements
+6. Ensure ALL fields are present for each step
 
 Return the complete JSON array now (start with [, no markdown):
 """
@@ -455,7 +490,8 @@ Return the complete JSON array now (start with [, no markdown):
     1. Identify what the image shows
     2. Find the matching description from the list above
     3. Use the corresponding path in the "image" field
-    4. Format: {"text": "any caption", "image": "Media/xxx/pagex_imgx.png"}
+    4. Format: {"text": "any caption or embedded text", "image": "Media/xxx/pagex_imgx.png"}
+    5. Extract TEXT FROM INSIDE the image/icon, not describe it
     """
         
         return f"""Extract all information from this document section into JSON format.
@@ -487,6 +523,7 @@ Return the complete JSON array now (start with [, no markdown):
     CRITICAL REMINDER:
     - Extract ALL text EXACTLY as written below the section "{section_info['section_name']}" but before next section: "{next_section_name}" - do not paraphrase or reword
     - For "image" fields: Use the image paths provided above when you see corresponding images
+    - Extract TEXT FROM INSIDE icons/images, do NOT describe them
     - Do not start from the top of the pages only extract information below the section until next section
     - Copy text word-for-word from the section
     - Preserve original order, spelling, capitalization, and punctuation
@@ -499,10 +536,11 @@ Return the complete JSON array now (start with [, no markdown):
     3. When you see an image/icon/diagram in the page, use the corresponding image path from the list above
     4. Extract each piece of text EXACTLY as it appears (DO NOT duplicate the information if the section is across two pages)
     5. Structure strictly according to the schema above
-    6. Extract text from images if image is available
+    6. Extract text from images if image is available (text INSIDE the image, not description)
     7. All text which you think should go under "other_content" key please put them under "notes" key in the JSON format
     8. Populate all the related values in the above JSON schema based on the section's text, if no related information available for a particular key in the schema then leave it as "".
     9. Populate image fields with the actual paths when images are present
+    10. For multiple images/icons, create separate list entries for each
 
     Return the complete JSON object now (start with {{ or [, no markdown):
     """
