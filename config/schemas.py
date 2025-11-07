@@ -1,7 +1,7 @@
 """
 Document and section schemas definition.
 Customized for safety procedure documents.
-FIXED: task_activities now uses proper hierarchical structure (sequences contain steps)
+UPDATED: task_activities now uses FLAT structure (sequence info repeated per step)
 """
 from typing import Dict, Any
 
@@ -12,7 +12,7 @@ from typing import Dict, Any
 SECTION_DEFINITIONS = {
     'safety': 'Safety information section including icons, statements, and additional safety notes',
     'material_risks_and_controls': 'Material risks and their associated critical controls',
-    'task_activities': 'Task activities with sequences, steps, descriptions, photos/diagrams, and notes',
+    'task_activities': 'Task activities with sequences and steps in flat structure',
     'additional_controls_required': 'Additional controls required with control types and reasons',
     'additional_ppe_required': 'Additional personal protective equipment (PPE) required',
     'specific_competencies_knowledge_and_skills': 'Specific competencies, knowledge and skills required',
@@ -79,19 +79,15 @@ SECTION_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "equipment_asset": {"text": ""},
             "maintainable_item": [{"text": ""}],
             "lmi": [{"text": ""}],
-            "steps": [
-                {
-                    "step_no": {"text": "", "image": ""},
-                    "step_description": [{"text": "", "image": ""}],
-                    "photo_diagram": [{"text": "", "image": ""}],
-                    "notes": [{"text": "", "image": ""}],
-                    "acceptable_limit": [{"text": "", "image": ""}],
-                    "question": [{"text": "", "image": ""}],
-                    "corrective_action": [{"text": "", "image": ""}],
-                    "execution_condition": {"text": "", "image": ""},
-                    "other_content": [{"text": "", "image": ""}]
-                }
-            ]
+            "step_no": {"text": "", "image": ""},
+            "step_description": [{"text": "", "image": ""}],
+            "photo_diagram": [{"text": "", "image": ""}],
+            "notes": [{"text": "", "image": ""}],
+            "acceptable_limit": [{"text": "", "image": ""}],
+            "question": [{"text": "", "image": ""}],
+            "corrective_action": [{"text": "", "image": ""}],
+            "execution_condition": {"text": "", "image": ""},
+            "other_content": [{"text": "", "image": ""}]
         }
     ],
     "general": [

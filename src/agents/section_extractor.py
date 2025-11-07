@@ -355,118 +355,148 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
             for desc, path in image_descriptions.items():
                 image_info += f"- {desc}: {path}\\n"
             image_info += """
-    \\nCRITICAL RULES FOR IMAGES AND GRAPHICAL ELEMENTS:
-    1. STEP DESCRIPTION field:
-       - Contains the main textual instructions for the step
-       - Small inline icons/symbols that are part of the text flow stay here
-       - For graphical elements in step description: extract any embedded text (not describe the icon)
-       - If multiple small icons exist, create separate list entries for each
+    \\nCRITICAL RULES FOR IMAGE PLACEMENT IN APPROPRIATE FIELDS:
     
-    2. PHOTO/DIAGRAM field:
-       - ONLY for actual photos, diagrams, or larger illustrations
-       - NOT for small icons or symbols that are part of step text
-       - Typically shows equipment, assembly diagrams, or reference photos
-       - Each distinct photo/diagram should be a separate list entry
+    STEP TABLE COLUMN MAPPING:
+    When you see a table with columns for steps, map images to the correct fields based on the column they appear in:
     
-    3. TEXT EXTRACTION from graphical elements:
-       - Extract any TEXT visible INSIDE icons/images (e.g., "HOLD POINT" text in a flame icon)
-       - Do NOT describe what the icon looks like
-       - If no text is embedded in the graphical element, use empty string ""
+    1. STEP DESCRIPTION column/cell:
+       - Main step text and instructions go to step_description field
+       - Small inline icons/symbols within step text: add as separate entries in step_description
+       - Extract embedded text from icons (e.g., "HOLD POINT"), don't describe them
     
-    4. MULTIPLE ELEMENTS:
-       - If multiple icons/images exist, create SEPARATE list entries for each
-       - Do not combine multiple elements into one entry
-       
-    5. NOTES field:
-       - Extract ALL notes, including those shown as graphical text elements
-       - If "Notes" appears as a graphical element, extract the text content
+    2. PHOTO/DIAGRAM column/cell:
+       - Images in photo/diagram column → photo_diagram field
+       - These are typically equipment photos, assembly diagrams, reference images
+       - Each image as separate list entry
+    
+    3. NOTES column/cell:
+       - Text and images in notes column → notes field
+       - Including graphical notes elements
        - Multiple notes = multiple list entries
+    
+    4. ACCEPTABLE LIMIT column/cell:
+       - Content from this column → acceptable_limit field
+    
+    5. QUESTION column/cell:
+       - Content from this column → question field
+    
+    6. CORRECTIVE ACTION column/cell:
+       - Content from this column → corrective_action field
+    
+    IMPORTANT: Place content in the field that matches its TABLE COLUMN, not based on content type!
 """
         
-        return f"""Extract all information from this TASK ACTIVITIES section into JSON format.
+        return f"""Extract all information from this TASK ACTIVITIES section into JSON format using a FLAT structure.
 
     Section: {section_info['section_name']} ({section_info['section_type']})
     Pages: {section_info['start_page']} to {section_info['end_page']}
     {image_info}
 
-    IMPORTANT - HIERARCHICAL STRUCTURE:
-    Task activities are organized as SEQUENCES containing STEPS:
-    - Each SEQUENCE has: sequence_no, sequence_name, equipment_asset, maintainable_item, lmi
-    - Each SEQUENCE contains multiple STEPS
-    - Each STEP has: step_no, step_description, photo_diagram, notes, acceptable_limit, question, corrective_action, execution_condition, other_content.
+    IMPORTANT - FLAT STRUCTURE:
+    Task activities use a FLAT structure where EACH STEP is a separate object in the array.
+    Sequence information must be REPEATED for each step belonging to that sequence.
 
-REQUIRED JSON STRUCTURE:
+    CRITICAL SEQUENCE NUMBER vs NAME HANDLING:
+    1. NUMBERED SEQUENCES (e.g., "1 JOB PREPARATION", "2 OPERATION"):
+       - sequence_no: {{"text": "1"}} (just the number)
+       - sequence_name: {{"text": "JOB PREPARATION"}} (the title without number)
+    
+    2. SUB-HEADINGS (e.g., "Tasks to be done under Isolation", "Pre-Isolation Tasks"):
+       - sequence_no: {{"text": ""}} (EMPTY - no number for sub-headings)
+       - sequence_name: {{"text": "Tasks to be done under Isolation"}} (the full sub-heading text)
+       - These sub-headings also determine the execution_condition field
+    
+    EXECUTION CONDITION BASED ON SUB-HEADINGS:
+    When you encounter sub-headings, set execution_condition for all steps under them:
+    - "Tasks to be done under Isolation" → execution_condition: "Isolated"
+    - "Pre-Isolation Tasks" → execution_condition: "Pre-Isolation"
+    - "Post-Isolation Tasks" → execution_condition: "Post-Isolation"
+    - Normal conditions → execution_condition: ""
+
+REQUIRED JSON STRUCTURE (FLAT):
 [
   {{
-    "sequence_no": {{"text": "Sequence number"}},
-    "sequence_name": {{"text": "Sequence title"}},
-    "equipment_asset": {{"text": "Equipment/asset name if any"}},
-    "maintainable_item": [{{"text": "Item description"}}],
-    "lmi": [{{"text": "LMI information if any"}}],
-    "steps": [
-      {{
-        "step_no": {{"text": "Step number", "image": ""}},
-        "step_description": [{{"text": "Step instructions", "image": ""}}],
-        "photo_diagram": [{{"text": "Caption or label", "image": ""}}],
-        "notes": [{{"text": "Note text", "image": ""}}],
-        "acceptable_limit": [{{"text": "Limit specification", "image": ""}}],
-        "question": [{{"text": "Question text", "image": ""}}],
-        "corrective_action": [{{"text": "Action to take", "image": ""}}],
-        "execution_condition": {{"text": "Condition for execution", "image": ""}},
-        "other_content": [{{"text": "Any other relevant content", "image": ""}}]
-      }}
-    ]
+    "sequence_no": {{"text": "1"}},
+    "sequence_name": {{"text": "JOB PREPARATION"}},
+    "equipment_asset": {{"text": "Equipment name"}},
+    "maintainable_item": [{{"text": "Item 1"}}],
+    "lmi": [{{"text": "LMI info"}}],
+    "step_no": {{"text": "1.1", "image": ""}},
+    "step_description": [{{"text": "First step instructions", "image": ""}}],
+    "photo_diagram": [{{"text": "", "image": ""}}],
+    "notes": [{{"text": "Note text", "image": ""}}],
+    "acceptable_limit": [{{"text": "", "image": ""}}],
+    "question": [{{"text": "", "image": ""}}],
+    "corrective_action": [{{"text": "", "image": ""}}],
+    "execution_condition": {{"text": "", "image": ""}},
+    "other_content": [{{"text": "", "image": ""}}]
+  }},
+  {{
+    "sequence_no": {{"text": ""}},  // EMPTY for sub-heading
+    "sequence_name": {{"text": "Tasks to be done under Isolation"}},  // Sub-heading title
+    "equipment_asset": {{"text": "Equipment name"}},
+    "maintainable_item": [{{"text": "Item 1"}}],
+    "lmi": [{{"text": "LMI info"}}],
+    "step_no": {{"text": "1.2", "image": ""}},
+    "step_description": [{{"text": "Second step instructions", "image": ""}}],
+    "photo_diagram": [{{"text": "", "image": "path_if_in_photo_column"}}],
+    "notes": [{{"text": "", "image": "path_if_in_notes_column"}}],
+    "acceptable_limit": [{{"text": "Limit value", "image": ""}}],
+    "question": [{{"text": "Check question", "image": ""}}],
+    "corrective_action": [{{"text": "Action text", "image": ""}}],
+    "execution_condition": {{"text": "Isolated", "image": ""}},
+    "other_content": [{{"text": "", "image": ""}}]
   }}
 ]
 
-CRITICAL RULES FOR FIELD POPULATION:
+CRITICAL RULES FOR CORRECT EXTRACTION:
 
-1. step_description field:
-   - Main text instructions for the step go here
-   - Small inline icons/symbols that appear within step text: include each as separate list entry
-   - For each icon: extract EMBEDDED TEXT only (e.g., "HOLD POINT" if visible in icon), not description
-   - Multiple icons = multiple list entries [{{"text": "main instruction", "image": ""}}, {{"text": "HOLD POINT", "image": "path1"}}, {{"text": "QA", "image": "path2"}}]
-   - Do NOT describe icons (wrong: "flame icon", correct: extract text inside icon or "")
+1. SEQUENCE NUMBER vs NAME:
+   - Numbered sequences: Split "1 JOB PREP" into sequence_no="1" and sequence_name="JOB PREP"
+   - Sub-headings: Put full text in sequence_name with EMPTY sequence_no
+   - Sub-headings like "Tasks under Isolation" have NO number
 
-2. photo_diagram field:
-   - ONLY actual photographs, technical diagrams, or illustrations
-   - NOT small icons or symbols from step description
-   - Each photo/diagram as separate entry: [{{"text": "diagram caption", "image": "path1"}}, {{"text": "photo caption", "image": "path2"}}]
-   - Leave empty [] if no actual photos/diagrams for the step
+2. IMAGE FIELD PLACEMENT BY TABLE COLUMN:
+   - Look at which TABLE COLUMN the image appears in
+   - Place image in corresponding field:
+     * Step Description column → step_description field
+     * Photo/Diagram column → photo_diagram field
+     * Notes column → notes field
+     * Acceptable Limit column → acceptable_limit field
+     * Question column → question field
+     * Corrective Action column → corrective_action field
+   - Do NOT put all images in one field
 
-3. notes field:
-   - Extract ALL notes, including those shown as graphical text elements
-   - If "Notes" appears as a graphical element, extract the text content from inside it
-   - Multiple notes = multiple list entries
-   - Do NOT skip notes even if they appear as images
+3. EXECUTION CONDITION:
+   - Set based on sub-heading context
+   - Applies to all steps under that sub-heading
+   - Changes when new sub-heading appears
 
-4. Text extraction from graphical elements:
-   - Extract TEXT EMBEDDED in the graphical element (what's written inside it)
-   - DO NOT describe the graphical element (wrong: "flame icon", correct: "HOLD POINT" if that text is in the icon)
-   - If no text inside the graphical element, use empty string ""
+4. TEXT EXTRACTION FROM ICONS:
+   - Extract TEXT INSIDE icons (e.g., "HOLD POINT")
+   - Do NOT describe icons (wrong: "flame icon")
+   - Empty string if no embedded text
 
-5. Multiple elements handling:
-   - ALWAYS create separate list entries for distinct elements
-   - Do not combine multiple icons/images/text blocks into one entry
-   - Each icon, each image, each text block = separate list entry
+5. MULTIPLE ELEMENTS:
+   - Create separate list entries for each element
+   - Don't combine multiple items into one entry
 
-6. PRESERVATION RULES:
-   - EVERY STEP MUST HAVE ALL FIELDS listed in the schema
-   - NEVER omit fields even if they are empty in the document
-   - Empty fields should use appropriate empty values as shown above
-   - But the field MUST STILL BE PRESENT
+6. FIELD COMPLETENESS:
+   - EVERY object MUST have ALL fields
+   - Use empty values for missing data
+   - Never omit fields
 
 EXTRACTION STEPS:
-1. Look at ALL pages shown ({section_info['start_page']} to {section_info['end_page']})
-2. Identify sequences in the section
-3. For each step, carefully distinguish:
-   - Main text instructions (step_description)
-   - Inline icons/symbols with embedded text (step_description as separate entries)
-   - Actual photos/diagrams (photo_diagram)
-   - Notes including graphical notes (extract text, not describe)
-4. Extract embedded text from graphical elements, not descriptions
-5. Create separate list entries for multiple elements
-6. Ensure ALL fields are present for each step
+1. Look at ALL pages ({section_info['start_page']} to {section_info['end_page']})
+2. Identify the table structure and column headers
+3. For each row/step:
+   - Determine if it's a numbered sequence or sub-heading
+   - Map content from each column to the appropriate field
+   - Images go to the field matching their table column
+   - Set execution_condition based on current sub-heading context
+4. Create one object per step with all fields populated
+5. Repeat sequence information for every step
 
 Return the complete JSON array now (start with [, no markdown):
 """
@@ -486,12 +516,23 @@ Return the complete JSON array now (start with [, no markdown):
             for desc, path in image_descriptions.items():
                 image_info += f"- {desc}: {path}\\n"
             image_info += """
-    \\nWHEN YOU SEE AN IMAGE IN THE DOCUMENT:
-    1. Identify what the image shows
-    2. Find the matching description from the list above
-    3. Use the corresponding path in the "image" field
-    4. Format: {"text": "any caption or embedded text", "image": "Media/xxx/pagex_imgx.png"}
-    5. Extract TEXT FROM INSIDE the image/icon, not describe it
+    \\nCRITICAL RULES FOR IMAGE PLACEMENT:
+    1. IDENTIFY TABLE STRUCTURE:
+       - Look for table columns/cells in the document
+       - Map images to fields based on their COLUMN POSITION, not content type
+    
+    2. COLUMN-TO-FIELD MAPPING:
+       - Images in a specific column go to the corresponding field
+       - If document has columns like "Risk | Description | Controls"
+         then images in Risk column → risk field, etc.
+    
+    3. TEXT EXTRACTION:
+       - Extract TEXT FROM INSIDE icons/images (e.g., "HOLD POINT", "QA")
+       - Do NOT describe what the icon looks like
+       - If no text is embedded, use empty string ""
+    
+    4. FORMAT:
+       - {"text": "any caption or embedded text", "image": "Media/xxx/pagex_imgx.png"}
     """
         
         return f"""Extract all information from this document section into JSON format.
@@ -520,9 +561,16 @@ Return the complete JSON array now (start with [, no markdown):
     - But the field MUST STILL BE PRESENT
     - NEVER use null, undefined, or omit the field
 
+    CRITICAL IMAGE PLACEMENT RULES:
+    - If document has a table structure, place images in fields matching their table columns
+    - Don't put all images in one field - distribute based on column context
+    - Extract TEXT FROM INSIDE icons/images, do NOT describe them
+    - Multiple images in same column = multiple list entries in that field
+
     CRITICAL REMINDER:
     - Extract ALL text EXACTLY as written below the section "{section_info['section_name']}" but before next section: "{next_section_name}" - do not paraphrase or reword
     - For "image" fields: Use the image paths provided above when you see corresponding images
+    - Place images in the field that matches their TABLE COLUMN position
     - Extract TEXT FROM INSIDE icons/images, do NOT describe them
     - Do not start from the top of the pages only extract information below the section until next section
     - Copy text word-for-word from the section
@@ -532,15 +580,18 @@ Return the complete JSON array now (start with [, no markdown):
 
     EXTRACTION STEPS:
     1. Look at ALL pages shown ({section_info['start_page']} to {section_info['end_page']})
-    2. Identify all text in the section {section_info['section_name']} (including text in images) until you reach the next section: {next_section_name}
-    3. When you see an image/icon/diagram in the page, use the corresponding image path from the list above
-    4. Extract each piece of text EXACTLY as it appears (DO NOT duplicate the information if the section is across two pages)
-    5. Structure strictly according to the schema above
-    6. Extract text from images if image is available (text INSIDE the image, not description)
-    7. All text which you think should go under "other_content" key please put them under "notes" key in the JSON format
-    8. Populate all the related values in the above JSON schema based on the section's text, if no related information available for a particular key in the schema then leave it as "".
-    9. Populate image fields with the actual paths when images are present
-    10. For multiple images/icons, create separate list entries for each
+    2. Identify the table structure and column headers (if any)
+    3. Identify all text in the section {section_info['section_name']} until you reach the next section: {next_section_name}
+    4. When you see an image/icon/diagram:
+       - Determine which column/field it belongs to based on position
+       - Use the corresponding image path from the list above
+       - Extract embedded text, don't describe the image
+    5. Extract each piece of text EXACTLY as it appears (DO NOT duplicate if section spans pages)
+    6. Structure strictly according to the schema above
+    7. Place images in their appropriate fields based on column position
+    8. All text which you think should go under "other_content" key please put them under "notes" key in the JSON format
+    9. Populate all the related values in the above JSON schema based on the section's text
+    10. For multiple images/icons in same column, create separate list entries
 
     Return the complete JSON object now (start with {{ or [, no markdown):
     """
