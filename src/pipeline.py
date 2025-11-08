@@ -10,8 +10,12 @@ import time
 import re
 
 from config.settings import MAX_WORKERS, MODEL
-from config.schemas import SECTION_SCHEMAS, get_section_schema
-from src.agents import SectionDetectionAgent, SectionExtractionAgent, ValidationAgent, ReviewAgent
+from src.agents.document_header_extractor import DocumentHeaderExtractor
+from src.agents.validator_docuporter import ValidationAgentDocuPorter
+from src.utils.docuporter_processor import process_docuporter_format
+from config.schemas_docuporter import get_section_schema
+
+from src.agents import SectionDetectionAgent, SectionExtractionAgent, ReviewAgent
 from src.utils import PDFProcessor, StorageManager, setup_logger
 from src.utils.image_descriptor import create_section_image_descriptions
 
@@ -27,7 +31,7 @@ class PDFToJSONPipeline:
         self.max_workers = max_workers
         self.pdf_processor = PDFProcessor()
         self.section_detector = SectionDetectionAgent()
-        self.validator = ValidationAgent()
+        self.validator = ValidationAgentDocuPorter()
         self.storage = StorageManager()
         self.review_agent = ReviewAgent()
         self.extracted_images = []
@@ -120,8 +124,10 @@ class PDFToJSONPipeline:
                 'review_issues_count': total_issues
             }
             
-            final_json = self.validator.validate_and_combine(
-                section_jsons, document_metadata, document_id
+            header_extractor = DocumentHeaderExtractor()
+            document_header = header_extractor.extract_header(pages_data[0], document_id)
+            final_json, metadata = self.validator.validate_and_combine(
+                document_header, section_jsons, document_metadata, document_id
             )
             
             logger.info(f"Processing complete ({duration:.1f}s)")

@@ -48,9 +48,9 @@ def main():
         if not review_only:
             result = pipeline.process_single_pdf(str(pdf_path))
             
-            logger.info("Processing successful")
-            logger.info(f"Document ID: {result['document_id']}")
-            logger.info(f"Confidence: {result['metadata']['confidence_score']:.2f}")
+            # logger.info("Processing successful")
+            # logger.info(f"Document ID: {result['document_id']}")
+            # logger.info(f"Confidence: {result['metadata']['confidence_score']:.2f}")
         else:
             import json
             with open(str(json_path), 'r') as file:

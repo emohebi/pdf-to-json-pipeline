@@ -7,7 +7,7 @@ import json
 from typing import List, Dict
 from strands import Agent
 
-from config.schemas import SECTION_DEFINITIONS
+from config.schemas_docuporter import SECTION_DEFINITIONS
 from config.settings import MODEL_MAX_TOKENS_DETECTION, MODEL
 from src.tools import invoke_bedrock_multimodal, prepare_images_for_bedrock
 from src.utils import setup_logger, StorageManager

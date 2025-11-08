@@ -5,7 +5,7 @@ import json
 from typing import Dict, Any, List, Tuple
 from strands import tool
 
-from config.schemas import get_section_schema
+from config.schemas_docuporter import get_section_schema
 from src.utils.logger import setup_logger
 
 logger = setup_logger('validation_tools')

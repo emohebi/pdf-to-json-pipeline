@@ -2,7 +2,7 @@
 Configuration package for PDF to JSON pipeline.
 """
 from .settings import *
-from .schemas import *
+from .schemas_docuporter import *
 
 __all__ = [
     'SECTION_DEFINITIONS',

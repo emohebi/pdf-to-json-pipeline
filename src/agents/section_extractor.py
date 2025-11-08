@@ -9,7 +9,7 @@ import re
 from typing import Dict, List, Tuple, Any, Union
 
 from config.settings import MODEL_MAX_TOKENS_EXTRACTION
-from config.schemas import get_section_schema
+from config.schemas_docuporter import get_section_schema
 from src.tools import invoke_bedrock_multimodal, prepare_images_for_bedrock
 from src.utils import setup_logger, StorageManager
 
@@ -218,10 +218,8 @@ RULES FOR "image" FIELDS:
 
 RULES FOR EMPTY OR MISSING DATA:
 - Use empty string "" for text fields with no content
-- Empty object with "text" property: {{"text": ""}}
-- Empty object with "text" and "image" properties: {{"text": "", "image": ""}}
-- Empty array of objects with "text" property: [{{"text": ""}}]
-- Empty array of objects with "text" and "image" properties: [{{"text": "", "image": ""}}]
+- Empty array of objects: []
+- Empty dictionary: {{}}
 - But the field MUST STILL BE PRESENT
 - DO NOT use null, "N/A", "Unknown", or any placeholder text
 - If a section doesn't exist, return the minimum valid structure
@@ -397,106 +395,137 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
     Task activities use a FLAT structure where EACH STEP is a separate object in the array.
     Sequence information must be REPEATED for each step belonging to that sequence.
 
-    CRITICAL SEQUENCE NUMBER vs NAME HANDLING:
-    1. NUMBERED SEQUENCES (e.g., "1 JOB PREPARATION", "2 OPERATION"):
-       - sequence_no: {{"text": "1"}} (just the number)
-       - sequence_name: {{"text": "JOB PREPARATION"}} (the title without number)
+    CRITICAL SEQUENCE NUMBERING RULES:
+    1. MAIN SEQUENCES (e.g., "1 JOB PREPARATION", "2 OPERATION"):
+       - sequence_no: {{"orig_text": "1", "text": "1"}} (just the number, SAME value in both fields)
+       - sequence_name: {{"orig_text": "JOB PREPARATION", "text": "JOB PREPARATION"}} (SAME value in both fields)
     
     2. SUB-HEADINGS (e.g., "Tasks to be done under Isolation", "Pre-Isolation Tasks"):
-       - sequence_no: {{"text": ""}} (EMPTY - no number for sub-headings)
-       - sequence_name: {{"text": "Tasks to be done under Isolation"}} (the full sub-heading text)
-       - These sub-headings also determine the execution_condition field
+       - These are NOT sequences themselves
+       - sequence_no: {{"orig_text": "", "text": ""}} (EMPTY for sub-headings)
+       - sequence_name: {{"orig_text": "Tasks to be done under Isolation", "text": "Tasks to be done under Isolation"}}
+       - Sub-headings determine execution_condition
+    
+    3. SUB-ITEMS under sub-headings (e.g., a., b., c., or 1a, 1b, 1c):
+       - These ARE the actual sequences
+       - Increment sequence number for these items
+       - sequence_no: {{"orig_text": "2", "text": "2"}} (next sequence number)
+       - sequence_name: {{"orig_text": "Item description", "text": "Item description"}}
+    
+    4. PREVENTIVE TASK DESCRIPTION SPECIAL RULE:
+       - If you see "Preventive Task Description" in the document:
+       - The BOLD text immediately under it becomes the sequence_name
+       - sequence_no: {{"orig_text": "", "text": ""}} (EMPTY)
+       - Items under it (1, 2, 3, etc.) are the steps for this sequence
+       - Example:
+         * Document shows: "Preventive Task Description" followed by bold "Conveyor Belt Inspection"
+         * sequence_no: {{"orig_text": "", "text": ""}}
+         * sequence_name: {{"orig_text": "Conveyor Belt Inspection", "text": "Conveyor Belt Inspection"}}
+         * Then items 1, 2, 3 below are steps
+
+    CRITICAL MAINTAINABLE ITEMS RULES:
+    1. DEFAULT BEHAVIOR - DO NOT POPULATE maintainable_item:
+       - By default, leave maintainable_item as empty array: []
+       - Only populate when you see the specific pattern below
+    
+    2. SPECIAL MAINTAINABLE ITEMS TABLE:
+       - ONLY populate maintainable_item when you see text like:
+         "The following Task or Tasks is applicable to all the maintenance items listed below"
+         (or similar wording about tasks applying to listed items)
+       - When this pattern appears:
+         * sequence_name: {{"orig_text": "", "text": ""}} (EMPTY)
+         * Extract all items from the table/list that follows
+         * Each item becomes an entry in maintainable_item array
+       - Example:
+         * Document shows: "The following Task is applicable to all the maintenance items listed below:"
+         * Followed by table/list: Feed Chute CV110, Discharge Chute CV110, etc.
+         * Result:
+           sequence_name: {{"orig_text": "", "text": ""}}
+           maintainable_item: [
+             {{"orig_text": "Feed Chute CV110", "text": "Feed Chute CV110"}},
+             {{"orig_text": "Discharge Chute CV110", "text": "Discharge Chute CV110"}}
+           ]
+    
+    3. WITHOUT THE SPECIAL TEXT:
+       - If you don't see text about "applicable to all maintenance items" or similar
+       - Keep maintainable_item as empty array: []
+       - Do NOT populate it with random equipment names
     
     EXECUTION CONDITION BASED ON SUB-HEADINGS:
     When you encounter sub-headings, set execution_condition for all steps under them:
-    - "Tasks to be done under Isolation" → execution_condition: "Isolated"
-    - "Pre-Isolation Tasks" → execution_condition: "Pre-Isolation"
-    - "Post-Isolation Tasks" → execution_condition: "Post-Isolation"
-    - Normal conditions → execution_condition: ""
+    - "Tasks to be done under Isolation" → execution_condition: {{"orig_text": "Isolated", "text": "Isolated"}}
+    - "Pre-Isolation Tasks" → execution_condition: {{"orig_text": "Pre-Isolation", "text": "Pre-Isolation"}}
+    - "Post-Isolation Tasks" → execution_condition: {{"orig_text": "Post-Isolation", "text": "Post-Isolation"}}
+    - Normal conditions → execution_condition: {{"orig_text": "", "text": ""}}
+
+    CRITICAL FIELD DUPLICATION RULE:
+    ALL fields with "orig_" prefix must have the SAME value as their corresponding field:
+    - orig_text = text (exact same value)
+    - orig_image = image (exact same value)
+    - orig_seq = seq (exact same value)
 
 REQUIRED JSON STRUCTURE (FLAT):
 [
   {{
-    "sequence_no": {{"text": "1"}},
-    "sequence_name": {{"text": "JOB PREPARATION"}},
-    "equipment_asset": {{"text": "Equipment name"}},
-    "maintainable_item": [{{"text": "Item 1"}}],
-    "lmi": [{{"text": "LMI info"}}],
-    "step_no": {{"text": "1.1", "image": ""}},
-    "step_description": [{{"text": "First step instructions", "image": ""}}],
-    "photo_diagram": [{{"text": "", "image": ""}}],
-    "notes": [{{"text": "Note text", "image": ""}}],
-    "acceptable_limit": [{{"text": "", "image": ""}}],
-    "question": [{{"text": "", "image": ""}}],
-    "corrective_action": [{{"text": "", "image": ""}}],
-    "execution_condition": {{"text": "", "image": ""}},
-    "other_content": [{{"text": "", "image": ""}}]
-  }},
-  {{
-    "sequence_no": {{"text": ""}},  // EMPTY for sub-heading
-    "sequence_name": {{"text": "Tasks to be done under Isolation"}},  // Sub-heading title
-    "equipment_asset": {{"text": "Equipment name"}},
-    "maintainable_item": [{{"text": "Item 1"}}],
-    "lmi": [{{"text": "LMI info"}}],
-    "step_no": {{"text": "1.2", "image": ""}},
-    "step_description": [{{"text": "Second step instructions", "image": ""}}],
-    "photo_diagram": [{{"text": "", "image": "path_if_in_photo_column"}}],
-    "notes": [{{"text": "", "image": "path_if_in_notes_column"}}],
-    "acceptable_limit": [{{"text": "Limit value", "image": ""}}],
-    "question": [{{"text": "Check question", "image": ""}}],
-    "corrective_action": [{{"text": "Action text", "image": ""}}],
-    "execution_condition": {{"text": "Isolated", "image": ""}},
-    "other_content": [{{"text": "", "image": ""}}]
+    "equipment_asset": {{"orig_text": "Equipment name", "text": "Equipment name"}},
+    "sequence_no": {{"orig_text": "1", "text": "1"}},
+    "sequence_name": {{"orig_text": "JOB PREPARATION", "text": "JOB PREPARATION"}},
+    "maintainable_item": [],  // Usually empty unless special table present
+    "lmi": [{{"orig_text": "LMI info", "text": "LMI info"}}],
+    "step_no": {{"orig_text": "1.1", "orig_image": "", "text": "1.1", "image": ""}},
+    "step_description": [{{"orig_text": "Step instructions", "orig_image": "", "text": "Step instructions", "image": ""}}],
+    "photo_diagram": [{{"orig_text": "", "orig_image": "path", "text": "", "image": "path"}}],
+    "notes": [{{"orig_text": "Note text", "orig_image": "", "text": "Note text", "image": ""}}],
+    "acceptable_limit": [{{"orig_text": "45 Nm", "orig_image": "", "text": "45 Nm", "image": ""}}],
+    "question": [{{"orig_text": "Is it ok?", "orig_image": "", "text": "Is it ok?", "image": ""}}],
+    "corrective_action": [{{"orig_text": "Fix it", "orig_image": "", "text": "Fix it", "image": ""}}],
+    "execution_condition": {{"orig_text": "", "text": ""}},
+    "other_content": [{{"orig_text": "", "orig_image": "", "text": "", "image": ""}}]
   }}
 ]
 
-CRITICAL RULES FOR CORRECT EXTRACTION:
+CRITICAL EXTRACTION RULES:
 
-1. SEQUENCE NUMBER vs NAME:
-   - Numbered sequences: Split "1 JOB PREP" into sequence_no="1" and sequence_name="JOB PREP"
-   - Sub-headings: Put full text in sequence_name with EMPTY sequence_no
-   - Sub-headings like "Tasks under Isolation" have NO number
+1. SEQUENCE HIERARCHY:
+   - Main numbered items (1, 2, 3) are sequences (unless under Preventive Task Description)
+   - Sub-headings are NOT sequences (empty sequence_no)
+   - Sub-items (a, b, c) under sub-headings ARE sequences (get next number)
+   - Preventive Task Description: bold text after it = sequence_name with empty sequence_no
 
-2. IMAGE FIELD PLACEMENT BY TABLE COLUMN:
-   - Look at which TABLE COLUMN the image appears in
-   - Place image in corresponding field:
-     * Step Description column → step_description field
-     * Photo/Diagram column → photo_diagram field
-     * Notes column → notes field
-     * Acceptable Limit column → acceptable_limit field
-     * Question column → question field
-     * Corrective Action column → corrective_action field
-   - Do NOT put all images in one field
+2. MAINTAINABLE ITEMS:
+   - Default: Keep empty array []
+   - Only populate when seeing "applicable to all maintenance items" text pattern
+   - When populated, set sequence_name to empty string
 
-3. EXECUTION CONDITION:
-   - Set based on sub-heading context
-   - Applies to all steps under that sub-heading
-   - Changes when new sub-heading appears
+3. FIELD VALUE DUPLICATION:
+   - ALWAYS duplicate values: orig_text = text, orig_image = image
+   - Never leave one empty if the other has value
 
-4. TEXT EXTRACTION FROM ICONS:
-   - Extract TEXT INSIDE icons (e.g., "HOLD POINT")
-   - Do NOT describe icons (wrong: "flame icon")
-   - Empty string if no embedded text
+4. EMPTY FIELD HANDLING:
+   - If both text and image are empty → field can be empty array [] or empty dict {{}}
+   - Empty arrays: [] instead of [{{"orig_text": "", "text": ""}}]
+   - Empty dicts: {{}} instead of {{"orig_text": "", "text": ""}}
 
-5. MULTIPLE ELEMENTS:
-   - Create separate list entries for each element
-   - Don't combine multiple items into one entry
+5. IMAGE PLACEMENT BY COLUMN:
+   - Map images to fields based on table column
+   - Don't put all images in one field
 
-6. FIELD COMPLETENESS:
-   - EVERY object MUST have ALL fields
-   - Use empty values for missing data
-   - Never omit fields
+6. TEXT EXTRACTION:
+   - Extract TEXT from icons, don't describe them
+   - Extract exact text, don't paraphrase
 
 EXTRACTION STEPS:
 1. Look at ALL pages ({section_info['start_page']} to {section_info['end_page']})
-2. Identify the table structure and column headers
-3. For each row/step:
-   - Determine if it's a numbered sequence or sub-heading
-   - Map content from each column to the appropriate field
-   - Images go to the field matching their table column
-   - Set execution_condition based on current sub-heading context
-4. Create one object per step with all fields populated
-5. Repeat sequence information for every step
+2. Check for "Preventive Task Description" pattern
+3. Check for "applicable to all maintenance items" pattern
+4. Identify the sequence structure (main items, sub-headings, sub-items)
+5. For each step:
+   - Determine sequence numbering based on patterns
+   - Handle maintainable_item according to rules
+   - Map content from each column to appropriate field
+   - Duplicate all values to orig_ fields
+   - Set execution_condition based on sub-heading context
+6. Clean up empty fields (remove if both text and image are empty)
 
 Return the complete JSON array now (start with [, no markdown):
 """
@@ -532,7 +561,9 @@ Return the complete JSON array now (start with [, no markdown):
        - If no text is embedded, use empty string ""
     
     4. FORMAT:
-       - {"text": "any caption or embedded text", "image": "Media/xxx/pagex_imgx.png"}
+       - {"orig_text": "caption", "orig_image": "path", "text": "caption", "image": "path"}
+       - orig_text = text (SAME value)
+       - orig_image = image (SAME value)
     """
         
         return f"""Extract all information from this document section into JSON format.
@@ -544,22 +575,28 @@ Return the complete JSON array now (start with [, no markdown):
     REQUIRED JSON SCHEMA:
     {json.dumps(self.section_schema, indent=2)}
 
-    CRITICAL SCHEMA PRESERVATION RULES:
-    1. YOU MUST INCLUDE EVERY KEY shown in the schema above
-    2. YOU MUST PRESERVE THE EXACT STRUCTURE - do not add, remove, or rename ANY keys
-    3. For EVERY field in the schema:
-    - If you find matching content → populate with the EXACT text
-    - If no matching content exists → use the default empty value
-    4. NEVER SKIP OR OMIT ANY KEY from the schema, even if empty
+    CRITICAL DOCUPORTER FORMAT RULES:
+    1. FIELD DUPLICATION:
+       - Every "text" field has a corresponding "orig_text" field with SAME value
+       - Every "image" field has a corresponding "orig_image" field with SAME value
+       - Every "seq" field has a corresponding "orig_seq" field with SAME value
+       - NEVER leave one empty if the other has value
+    
+    2. SCHEMA PRESERVATION:
+       - Include EVERY KEY shown in the schema
+       - NEVER add, remove, or rename keys
+       - Preserve the EXACT structure
+    
+    3. EMPTY FIELD HANDLING:
+       - If both text and image are empty → return empty array [] or empty dict {{}}
+       - [{{"orig_text": "", "text": ""}}] → []
+       - {{"orig_text": "", "text": ""}} → {{}}
+       - But if either has value, keep the structure
 
-    DEFAULT VALUES FOR EMPTY FIELDS:
-    - For string fields → use empty string: ""
-    - Empty object with "text" property: {{"text": ""}}
-    - Empty object with "text" and "image" properties: {{"text": "", "image": ""}}
-    - Empty array of objects with "text" property: [{{"text": ""}}]
-    - Empty array of objects with "text" and "image" properties: [{{"text": "", "image": ""}}]
-    - But the field MUST STILL BE PRESENT
-    - NEVER use null, undefined, or omit the field
+    DEFAULT VALUES FOR FIELDS WITH CONTENT:
+    - String fields with value: {{"orig_text": "value", "text": "value"}}
+    - Image fields with path: {{"orig_image": "path", "image": "path"}}
+    - Empty fields: {{}} or []
 
     CRITICAL IMAGE PLACEMENT RULES:
     - If document has a table structure, place images in fields matching their table columns
@@ -567,31 +604,25 @@ Return the complete JSON array now (start with [, no markdown):
     - Extract TEXT FROM INSIDE icons/images, do NOT describe them
     - Multiple images in same column = multiple list entries in that field
 
-    CRITICAL REMINDER:
-    - Extract ALL text EXACTLY as written below the section "{section_info['section_name']}" but before next section: "{next_section_name}" - do not paraphrase or reword
-    - For "image" fields: Use the image paths provided above when you see corresponding images
-    - Place images in the field that matches their TABLE COLUMN position
-    - Extract TEXT FROM INSIDE icons/images, do NOT describe them
-    - Do not start from the top of the pages only extract information below the section until next section
+    CRITICAL EXTRACTION RULES:
+    - Extract ALL text EXACTLY as written below the section "{section_info['section_name']}" but before next section: "{next_section_name}"
+    - Do not paraphrase or reword
     - Copy text word-for-word from the section
-    - Preserve original order, spelling, capitalization, and punctuation
-    - Use empty string "" for missing data, never use "N/A" or placeholder text
-    - Return ONLY the JSON, no markdown code blocks or extra text
+    - Preserve original spelling, capitalization, and punctuation
+    - For images: Use the paths provided above
+    - Place images in the field that matches their TABLE COLUMN position
 
     EXTRACTION STEPS:
     1. Look at ALL pages shown ({section_info['start_page']} to {section_info['end_page']})
     2. Identify the table structure and column headers (if any)
-    3. Identify all text in the section {section_info['section_name']} until you reach the next section: {next_section_name}
-    4. When you see an image/icon/diagram:
-       - Determine which column/field it belongs to based on position
-       - Use the corresponding image path from the list above
-       - Extract embedded text, don't describe the image
-    5. Extract each piece of text EXACTLY as it appears (DO NOT duplicate if section spans pages)
-    6. Structure strictly according to the schema above
-    7. Place images in their appropriate fields based on column position
-    8. All text which you think should go under "other_content" key please put them under "notes" key in the JSON format
-    9. Populate all the related values in the above JSON schema based on the section's text
-    10. For multiple images/icons in same column, create separate list entries
+    3. Extract all text from section {section_info['section_name']} until next section: {next_section_name}
+    4. For each piece of content:
+       - Extract text EXACTLY as it appears
+       - Duplicate to orig_text field
+       - Map images to appropriate fields by column
+       - Duplicate image paths to orig_image fields
+    5. Structure according to the schema
+    6. Clean up empty fields (if both text and image empty, use [] or {{}})
 
     Return the complete JSON object now (start with {{ or [, no markdown):
     """
