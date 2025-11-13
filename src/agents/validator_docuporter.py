@@ -45,8 +45,8 @@ class ValidationAgentDocuPorter:
         
         # Initialize document structure
         document_json = {
-            'Document_Id': document_id,
-            'Document_header': document_header
+            'document_id': document_id,
+            'document_header': document_header
         }
         
         # Add section names to header
@@ -55,7 +55,7 @@ class ValidationAgentDocuPorter:
             section_name = section.get('section_name', 'Unknown')
             if section_name not in section_names:
                 section_names.append(section_name)
-        document_json['Document_header']['Sections'] = section_names
+        document_json['document_header']['sections'] = section_names
         
         # Process each section
         sections_by_type = {}

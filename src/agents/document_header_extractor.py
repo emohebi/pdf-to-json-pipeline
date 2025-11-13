@@ -62,45 +62,46 @@ class DocumentHeaderExtractor:
             logger.error(f"[{document_id}] Failed to extract header: {e}")
             # Return empty header structure
             return self._get_empty_header()
-    
+        
+ # - The organization or entity that created the document (belong to document source)  
     def _build_header_extraction_prompt(self) -> str:
         """Build prompt for document header extraction."""
         return """Extract document header information from this first page of the document.
 
 Look for the following information typically found at the top of technical/safety documents:
-1. Document Source - The organization or entity that created the document
-2. Document Type - Type of document (e.g., "Work Method Statement", "Safety Procedure", etc.)
-3. Document Number - The unique document identifier/reference number
-4. Document Version Number - Version or revision number
-5. Work Description - Title or description of the work/procedure
-6. Purpose - The purpose or objective of the document
+1. document source 
+2. document type - Type of document (e.g., "Work Method Statement", "Safety Procedure", etc.)
+3. document number - The unique document identifier/reference number
+4. document version number - Version or revision number
+5. work description - Title or description of the work/procedure
+6. purpose - The purpose or objective of the document
 
 CRITICAL: For each field, extract the EXACT text as it appears in the document.
 Duplicate the same value for both "orig_text" and "text" fields.
 
 REQUIRED JSON STRUCTURE:
 {
-    "Document_Source": {
+    "document_source": {
         "orig_text": "exact text from document",
         "text": "exact text from document"
     },
-    "Document_Type": {
+    "document_type": {
         "orig_text": "exact text from document",
         "text": "exact text from document"
     },
-    "Document_Number": {
+    "document_number": {
         "orig_text": "exact text from document",
         "text": "exact text from document"
     },
-    "Document_Version_Number": {
+    "document_version_number": {
         "orig_text": "exact text from document",
         "text": "exact text from document"
     },
-    "Work_Description": {
+    "work_description": {
         "orig_text": "exact text from document",
         "text": "exact text from document"
     },
-    "Purpose": {
+    "purpose": {
         "orig_text": "exact text from document",
         "text": "exact text from document"
     }

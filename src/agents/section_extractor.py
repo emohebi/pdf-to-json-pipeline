@@ -3,6 +3,7 @@ Stage 2: Section Extraction Agent - Exact Text Extraction Version
 Extracts structured data from document sections with EXACT text preservation.
 FIXED: task_activities now uses proper hierarchical structure (sequence -> steps)
 ENHANCED: Better handling of graphical elements and multiple images
+MODIFIED: Maintainable items now create a separate sequence with empty sequence_no, sequence_name, and steps
 """
 import json
 import re
@@ -391,80 +392,7 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
     Pages: {section_info['start_page']} to {section_info['end_page']}
     {image_info}
 
-    IMPORTANT - FLAT STRUCTURE:
-    Task activities use a FLAT structure where EACH STEP is a separate object in the array.
-    Sequence information must be REPEATED for each step belonging to that sequence.
-
-    CRITICAL SEQUENCE NUMBERING RULES:
-    1. MAIN SEQUENCES (e.g., "1 JOB PREPARATION", "2 OPERATION"):
-       - sequence_no: {{"orig_text": "1", "text": "1"}} (just the number, SAME value in both fields)
-       - sequence_name: {{"orig_text": "JOB PREPARATION", "text": "JOB PREPARATION"}} (SAME value in both fields)
-    
-    2. SUB-HEADINGS (e.g., "Tasks to be done under Isolation", "Pre-Isolation Tasks"):
-       - These are NOT sequences themselves
-       - sequence_no: {{"orig_text": "", "text": ""}} (EMPTY for sub-headings)
-       - sequence_name: {{"orig_text": "Tasks to be done under Isolation", "text": "Tasks to be done under Isolation"}}
-       - Sub-headings determine execution_condition
-    
-    3. SUB-ITEMS under sub-headings (e.g., a., b., c., or 1a, 1b, 1c):
-       - These ARE the actual sequences
-       - Increment sequence number for these items
-       - sequence_no: {{"orig_text": "2", "text": "2"}} (next sequence number)
-       - sequence_name: {{"orig_text": "Item description", "text": "Item description"}}
-    
-    4. PREVENTIVE TASK DESCRIPTION SPECIAL RULE:
-       - If you see "Preventive Task Description" in the document:
-       - The BOLD text immediately under it becomes the sequence_name
-       - sequence_no: {{"orig_text": "", "text": ""}} (EMPTY)
-       - Items under it (1, 2, 3, etc.) are the steps for this sequence
-       - Example:
-         * Document shows: "Preventive Task Description" followed by bold "Conveyor Belt Inspection"
-         * sequence_no: {{"orig_text": "", "text": ""}}
-         * sequence_name: {{"orig_text": "Conveyor Belt Inspection", "text": "Conveyor Belt Inspection"}}
-         * Then items 1, 2, 3 below are steps
-
-    CRITICAL MAINTAINABLE ITEMS RULES:
-    1. DEFAULT BEHAVIOR - DO NOT POPULATE maintainable_item:
-       - By default, leave maintainable_item as empty array: []
-       - Only populate when you see the specific pattern below
-    
-    2. SPECIAL MAINTAINABLE ITEMS TABLE:
-       - ONLY populate maintainable_item when you see text like:
-         "The following Task or Tasks is applicable to all the maintenance items listed below"
-         (or similar wording about tasks applying to listed items)
-       - When this pattern appears:
-         * sequence_name: {{"orig_text": "", "text": ""}} (EMPTY)
-         * Extract all items from the table/list that follows
-         * Each item becomes an entry in maintainable_item array
-       - Example:
-         * Document shows: "The following Task is applicable to all the maintenance items listed below:"
-         * Followed by table/list: Feed Chute CV110, Discharge Chute CV110, etc.
-         * Result:
-           sequence_name: {{"orig_text": "", "text": ""}}
-           maintainable_item: [
-             {{"orig_text": "Feed Chute CV110", "text": "Feed Chute CV110"}},
-             {{"orig_text": "Discharge Chute CV110", "text": "Discharge Chute CV110"}}
-           ]
-    
-    3. WITHOUT THE SPECIAL TEXT:
-       - If you don't see text about "applicable to all maintenance items" or similar
-       - Keep maintainable_item as empty array: []
-       - Do NOT populate it with random equipment names
-    
-    EXECUTION CONDITION BASED ON SUB-HEADINGS:
-    When you encounter sub-headings, set execution_condition for all steps under them:
-    - "Tasks to be done under Isolation" → execution_condition: {{"orig_text": "Isolated", "text": "Isolated"}}
-    - "Pre-Isolation Tasks" → execution_condition: {{"orig_text": "Pre-Isolation", "text": "Pre-Isolation"}}
-    - "Post-Isolation Tasks" → execution_condition: {{"orig_text": "Post-Isolation", "text": "Post-Isolation"}}
-    - Normal conditions → execution_condition: {{"orig_text": "", "text": ""}}
-
-    CRITICAL FIELD DUPLICATION RULE:
-    ALL fields with "orig_" prefix must have the SAME value as their corresponding field:
-    - orig_text = text (exact same value)
-    - orig_image = image (exact same value)
-    - orig_seq = seq (exact same value)
-
-REQUIRED JSON STRUCTURE (FLAT):
+    REQUIRED JSON STRUCTURE (FLAT):
 [
   {{
     "equipment_asset": {{"orig_text": "Equipment name", "text": "Equipment name"}},
@@ -484,48 +412,249 @@ REQUIRED JSON STRUCTURE (FLAT):
   }}
 ]
 
-CRITICAL EXTRACTION RULES:
+    IMPORTANT - FLAT STRUCTURE:
+    Task activities use a FLAT structure where EACH STEP is a separate object in the array.
+    Sequence information must be REPEATED for each step belonging to that sequence.
 
-1. SEQUENCE HIERARCHY:
-   - Main numbered items (1, 2, 3) are sequences (unless under Preventive Task Description)
+    CRITICAL SEQUENCE NUMBERING RULES:
+    1. MAIN SEQUENCES (e.g., "1 JOB PREPARATION", "2 OPERATION"):
+       - sequence_no: {{"orig_text": "1", "text": "1"}} (just the number, SAME value in both fields)
+       - sequence_name: {{"orig_text": "JOB PREPARATION", "text": "JOB PREPARATION"}} (SAME value in both fields)
+    
+    2. SUB-HEADINGS (e.g., "Tasks to be done under Isolation", "Pre-Isolation Tasks"):
+       - These are NOT sequences themselves
+       - sequence_no: {{"orig_text": "", "text": ""}} (EMPTY for sub-headings)
+       - sequence_name: {{"orig_text": "Tasks to be done under Isolation", "text": "Tasks to be done under Isolation"}}
+       - Sub-headings determine execution_condition:
+            When you encounter sub-headings, set execution_condition for all steps under them:
+            - "Tasks to be done under Isolation" → execution_condition: {{"orig_text": "Isolated", "text": "Isolated"}}
+            - "Pre-Isolation Tasks" → execution_condition: {{"orig_text": "Pre-Isolation", "text": "Pre-Isolation"}}
+            - "Post-Isolation Tasks" → execution_condition: {{"orig_text": "Post-Isolation", "text": "Post-Isolation"}}
+            - Normal conditions → execution_condition: {{"orig_text": "", "text": ""}}
+    
+    3. SUB-ITEMS under sub-headings (e.g., a., b., c., or 1a, 1b, 1c):
+       - These ARE the actual sequences
+       - Increment sequence number for these items
+       - sequence_no: {{"orig_text": "2", "text": "2"}} (next sequence number)
+       - sequence_name: {{"orig_text": "Item description", "text": "Item description"}}
+        
+
+    🔴 PRE-EXTRACTION VALIDATION FOR TASK ACTITVITES THAT ARE ABOUT MAINTAINABLE ITEMS - MUST DO FIRST:
+    1. Scan for all "The following Tasks are applicable to all the maintenance items listed below" and [BOLD] titles, these are sequence dividers.
+    2. If found, there are the following two scenarios:
+       - SCENARIO 1: You see "The following Tasks are applicable to all the maintenance items listed below" alone without a [BOLD] title right AFTER it then it is a sequence
+       without both sequence_no and sequence_name.
+        Example 1:
+            [BOLD] Equipment Name --> [FIRST BOUNDARY]
+            [No steps here]
+            "The following Tasks..." --> [SECOND BOUNDARY]
+            1. Step one
+            2. Step two
+            
+            Result:
+            - First sequence: sequence_name: "Equipment Name" and sequence_no is empty, NO steps (empty step fields)
+            - Second sequence: Steps 1 and 2 (ONLY in this sequence)
+
+        Example 2:
+            "The following Tasks..." --> [FIRST BOUNDARY]
+            1. Step one
+            2. Step two
+            [BOLD] Equipment Name --> [SECOND BOUNDARY]
+            [No steps here]
+            
+            Result:
+            - First sequence: both sequence_name and sequence_no are empty, Steps 1 and 2 (ONLY in this sequence)
+            - Second sequence: sequence_name: "Equipment Name" and sequence_no is empty, NO steps (empty step fields)
+
+        - SCENARIO 2: You see "The following Tasks are applicable to all the maintenance items listed below" with a [BOLD] title right AFTER it then it is a sequence
+       with a sequence_name as the [BOLD] title.
+        Example 1:
+            [BOLD] Equipment Name --> [FIRST BOUNDARY]
+            [No steps here]
+            "The following Tasks..." --> [SECOND BOUNDARY]
+            [BOLD] Equipment Name 2
+            1. Step one
+            2. Step two
+            "The following Tasks..." --> [THIRD BOUNDARY]
+            3. Step one
+            4. Step two
+            
+            Result:
+            - First sequence: sequence_name: "Equipment Name" and sequence_no is empty, NO steps (empty step fields)
+            - Second sequence: sequence_name: "Equipment Name 2" and sequence_no is empty, Steps 1 and 2 (ONLY in this sequence)
+            - Third sequence: both sequence_name and sequence_no are empty, Steps 3 and 4 (ONLY in this sequence)
+
+       - NEVER mix content across these boundaries
+    3. Count how many sequences you will create before starting extraction
+    
+    ⚠️ CRITICAL SEQUENCE ASSIGNMET:
+    - In flat structure: If sequence has 2 steps, create 2 objects for that sequence with duplicated fields
+    - If sequence has 0 steps, create 1 object with empty step fields
+    
+    ⚠️ CRITICAL STEP ASSIGNMENT: 
+    - Steps belong ONLY to the sequence where they physically appear in the document
+    - If no steps exist between the current sequence and next sequence..." → the current sequence has NO steps
+    - DO NOT copy steps after next sequence into any other sequences
+    - Each step appears in EXACTLY ONE sequence
+
+    ⚠️ CRITICAL MAINTAINABLE ITEMS RULES - PREVENTIVE TASK DESCRIPTION SCENARIOS:
+    When you see "Preventive Task Description" in headers/tables or document is about maintainable items:
+    
+    1 - If the sequence has sequence_name but not maintainable items then DUPLICATE sequence_name to maintainable_item like example below:
+    
+    Example - CORRECT extraction:
+    Document structure:
+    [BOLD] TLO Hydraulic Power Pack
+    [Diagram]
+    "The following Tasks are applicable to all the maintenance items listed below"
+    [Table with maintainable items]
+    [Steps]
+    
+    Result for FIRST sequence (ends at "The following Tasks..."):
+    {{
+      "sequence_no": {{"orig_text": "", "text": ""}},
+      "sequence_name": {{"orig_text": "TLO Hydraulic Power Pack", "text": "TLO Hydraulic Power Pack"}},
+      "maintainable_item": [
+        {{"orig_text": "TLO Hydraulic Power Pack", "text": "TLO Hydraulic Power Pack"}}  // DUPLICATED - no table with maintainable items
+      ],
+      "step_no": {{"orig_text": "", "text": "", "orig_image": "", "image": ""}},  // EMPTY - no steps
+      "step_description": [],  // EMPTY - no steps
+      "photo_diagram": [],  // Diagram should go here if needed
+      "notes": [],
+      "acceptable_limit": [],  // EMPTY 
+      "question": [],
+      "corrective_action": [],
+      "execution_condition": {{"orig_text": "", "text": ""}},
+      "other_content": []
+    }}
+    
+    Example - CORRECT extraction:
+    Continuing from above example, SECOND sequence (starts after "The following Tasks..."):
+    {{
+      "sequence_no": {{"orig_text": "", "text": ""}},
+      "sequence_name": {{"orig_text": "", "text": ""}},  // EMPTY - no bold title
+      "maintainable_item": [
+        {{"orig_text": "Hydraulic Pump PS01 Suction Valve Open Limit Switch ZS1001", "text": "Hydraulic Pump PS01 Suction Valve Open Limit Switch ZS1001"}},
+        {{"orig_text": "Hydraulic Pump PS01 Inlet Strainer Blocked Pressure Switch PSH1002", "text": "Hydraulic Pump PS01 Inlet Strainer Blocked Pressure Switch PSH1002"}},
+        // ... all other items from the table
+      ],
+      "step_no": {{"orig_text": "1", "text": "1"}},
+      "step_description": [{{"orig_text": "Visually inspect condition of field device", "text": "Visually inspect condition of field device"}}],
+      // ... steps
+    }}
+    
+    🚫 WRONG - DO NOT DO THIS:
+    {{
+      "sequence_name": {{"orig_text": "TLO Hydraulic Power Pack", "text": "TLO Hydraulic Power Pack"}},
+      "maintainable_item": [
+        // ❌ WRONG: Including items from table AFTER "The following Tasks..." (next sequence) in this sequence
+        {{"orig_text": "Hydraulic Pump PS01...", "text": "Hydraulic Pump PS01..."}}
+      ],
+      "step_description": [
+        // ❌ WRONG: Including steps from AFTER the next sequence in this sequence
+        {{"orig_text": "Visually inspect condition of field device", "text": "Visually inspect condition of field device"}}
+      ]
+    }}
+    
+    ✅ CORRECT - DO THIS INSTEAD:
+    Create TWO separate sequences:
+    1. First: Bold title with duplicated maintainable_item, NO STEPS (empty step fields)
+    2. Second: Empty sequence_name, table items from after "The following Tasks...", steps from after "The following Tasks..."
+    
+    STEP DISTRIBUTION EXAMPLE:
+    Document: [BOLD] Title → "The following Tasks..." → Steps 1, 2, 3
+    Results in:
+    - Sequence 1: Title, NO steps (step_description: [])
+    - Sequence 2: Steps 1, 2, 3 (three separate objects in flat structure)
+
+ 
+    CRITICAL FIELD DUPLICATION RULE:
+    ALL fields with "orig_" prefix must have the SAME value as their corresponding field:
+    - orig_text = text (exact same value)
+    - orig_image = image (exact same value)
+    - orig_seq = seq (exact same value)
+
+
+CRITICAL EXTRACTION RULES:
+1. DOCUMENT TYPE DETECTION:
+   - Check for "Preventive Task Description" in headers/tables
+   - If found or document is about maintainable items → use SCENARIOS 1 & 2
+   - Otherwise → use standard sequence numbering
+
+2. MAINTAINABLE ITEMS SCENARIOS:
+   1 - Bold titles as sequences:
+   - Bold text = sequence with empty sequence_no
+   - Continue ONLY until reaching "The following Tasks..." or another bold title
+   - "The following Tasks..." ENDS this sequence immediately
+   - If maintainable table exists WITHIN this sequence (before boundary) → populate maintainable_item
+   - If no table WITHIN this sequence → duplicate sequence_name to maintainable_item
+   - DO NOT include anything after next sequence in this sequence
+   
+   2 - After "The following Tasks...":
+   - "The following Tasks..." creates a HARD BOUNDARY
+   - Start a completely NEW sequence for everything AFTER this text
+   - If bold title appears AFTER → use it as sequence_name
+   - If no bold title AFTER → both sequence_name and sequence_no empty
+
+3. STANDARD SEQUENCES (non-maintainable items):
+   - Main numbered items (1, 2, 3) are sequences
    - Sub-headings are NOT sequences (empty sequence_no)
    - Sub-items (a, b, c) under sub-headings ARE sequences (get next number)
-   - Preventive Task Description: bold text after it = sequence_name with empty sequence_no
 
-2. MAINTAINABLE ITEMS:
-   - Default: Keep empty array []
-   - Only populate when seeing "applicable to all maintenance items" text pattern
-   - When populated, set sequence_name to empty string
-
-3. FIELD VALUE DUPLICATION:
+4. FIELD VALUE DUPLICATION:
    - ALWAYS duplicate values: orig_text = text, orig_image = image
    - Never leave one empty if the other has value
 
-4. EMPTY FIELD HANDLING:
+5. EMPTY FIELD HANDLING:
    - If both text and image are empty → field can be empty array [] or empty dict {{}}
    - Empty arrays: [] instead of [{{"orig_text": "", "text": ""}}]
    - Empty dicts: {{}} instead of {{"orig_text": "", "text": ""}}
 
-5. IMAGE PLACEMENT BY COLUMN:
+6. IMAGE PLACEMENT BY COLUMN:
    - Map images to fields based on table column
    - Don't put all images in one field
 
-6. TEXT EXTRACTION:
+7. TEXT EXTRACTION:
    - Extract TEXT from icons, don't describe them
    - Extract exact text, don't paraphrase
 
 EXTRACTION STEPS:
 1. Look at ALL pages ({section_info['start_page']} to {section_info['end_page']})
-2. Check for "Preventive Task Description" pattern
-3. Check for "applicable to all maintenance items" pattern
-4. Identify the sequence structure (main items, sub-headings, sub-items)
-5. For each step:
-   - Determine sequence numbering based on patterns
-   - Handle maintainable_item according to rules
+
+1. Check if document is about maintainable items:
+   - Look for "Preventive Task Description" in headers/tables
+   - Look for maintainable items patterns
+   - Look for bold equipment/component names
+
+    1.1. CRITICAL CHECK for "The following Tasks are applicable to all the maintenance items listed below" and [BOLD] titles as sequence dividers:
+    - IMMEDIATELY plan to create MULTIPLE sequences
+    - DO NOT mix content across these boundaries
+
+    1.2. For maintainable items document:
+    PATTERN: Bold title → Content → "The following Tasks..." → Table → Steps
+    RESULT: TWO sequences
+    - Sequence 1: Bold title, duplicated maintainable_item, any steps BEFORE divider
+    - Sequence 2: Empty name, table items, steps AFTER divider
+
+    1.3. If maintainable items document detected, follow SCENARIO 1 & 2:
+    - Bold titles = sequences with empty sequence_no
+    - Extract steps under each sequence UNTIL hitting a boundary
+    - "The following Tasks..." is a HARD BOUNDARY - end current sequence
+    - If maintainable table found BEFORE next sequence → populate maintainable_item
+    - If no table BEFORE next sequence but have sequence_name → duplicate to maintainable_item
+    - After "The following Tasks..." → start NEW sequence with its own rules
+    - Content AFTER "The following Tasks..." NEVER belongs to previous sequences
+   
+2. For regular documents:
+   - Follow standard numbering (1, 2, 3...)
+   - Check for special patterns (sub-headings, sub-items)
+   
+3. For all entries:
    - Map content from each column to appropriate field
    - Duplicate all values to orig_ fields
    - Set execution_condition based on sub-heading context
-6. Clean up empty fields (remove if both text and image are empty)
+   
+4. Clean up empty fields (remove if both text and image are empty)
 
 Return the complete JSON array now (start with [, no markdown):
 """

@@ -31,7 +31,7 @@ def main():
     )
     
     args = parser.parse_args()
-    args.pdf = "./input/0165487.pdf"
+    args.pdf = "./input/0139885.pdf"
     # args.pdf = "./input/0154585.pdf"
     args.json = "./input/0154585.json"
     # Validate PDF exists

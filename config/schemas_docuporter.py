@@ -9,31 +9,31 @@ from typing import Dict, Any
 # ============================================================================
 
 DOCUMENT_HEADER_SCHEMA = {
-    "Document_Source": {
+    "document_source": {
         "orig_text": "",
         "text": ""
     },
-    "Document_Type": {
+    "document_type": {
         "orig_text": "",
         "text": ""
     },
-    "Document_Number": {
+    "document_number": {
         "orig_text": "",
         "text": ""
     },
-    "Document_Version_Number": {
+    "document_version_number": {
         "orig_text": "",
         "text": ""
     },
-    "Work_Description": {
+    "work_description": {
         "orig_text": "",
         "text": ""
     },
-    "Purpose": {
+    "purpose": {
         "orig_text": "",
         "text": ""
     },
-    "Sections": []
+    "sections": []
 }
 
 # ============================================================================
@@ -289,8 +289,8 @@ SECTION_SCHEMAS: Dict[str, Any] = {
 # ============================================================================
 
 DOCUMENT_SCHEMA = {
-    'Document_Id': '',
-    'Document_header': DOCUMENT_HEADER_SCHEMA,
+    'document_id': '',
+    'document_header': DOCUMENT_HEADER_SCHEMA,
     'safety': SECTION_SCHEMAS['safety'],
     'material_risks_and_controls': SECTION_SCHEMAS['material_risks_and_controls'],
     'additional_controls_required': SECTION_SCHEMAS['additional_controls_required'],
