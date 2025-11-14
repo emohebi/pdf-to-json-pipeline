@@ -242,24 +242,19 @@ Return ONLY the short description, nothing else:"""
             # Context-specific prompts
             context_prompts = {
                 'task_activities': """This image is from a task/activity section. 
-Describe it focusing on: step number if visible, equipment shown, action depicted, or diagram type.
-Examples: "Step 2 bolt removal diagram", "Valve adjustment procedure photo".""",
+Describe it focusing on: step number if visible, equipment shown, action depicted, or diagram type.""",
                 
                 'safety': """This image is from a safety section.
-Describe safety icons, warning symbols, or hazard indicators.
-Examples: "Fire hazard warning icon", "PPE required sign", "Emergency stop button location".""",
+Describe safety icons, warning symbols, or hazard indicators.""",
                 
                 'additional_ppe_required': """This image shows required PPE equipment.
-Describe the specific PPE item shown.
-Examples: "Safety goggles icon", "Hard hat symbol", "Chemical resistant gloves".""",
+Describe the specific PPE item shown.""",
                 
                 'material_risks_and_controls': """This image relates to risks and controls.
-Describe hazard symbols or control measures shown.
-Examples: "Electrical hazard warning", "Lock-out tag-out procedure diagram".""",
+Describe hazard symbols or control measures shown.""",
                 
                 'attached_images': """This is an attached reference image.
-Describe what it shows or depicts.
-Examples: "Equipment overview photo", "Site layout diagram", "Component detail view"."""
+Describe what it shows or depicts."""
             }
             
             context = context_prompts.get(section_type, "Describe this image briefly.")
@@ -268,16 +263,17 @@ Examples: "Equipment overview photo", "Site layout diagram", "Component detail v
 
 {context}
 
-Provide a SHORT (max 10 words), SPECIFIC description.
+Provide a detailed, SPECIFIC description which clearly describes the image for a computer vision model. 
+If you see any text or object's colors in the image please explain them for better matching accuracy.
 Return ONLY the description:"""
             
             description = invoke_bedrock_vision(
                 image_data=image_b64,
                 prompt=prompt,
-                max_tokens=100
+                max_tokens=1000
             )
             
-            return description.strip()[:100]
+            return description.strip()
             
         except Exception as e:
             logger.error(f"Error generating contextual description: {e}")
