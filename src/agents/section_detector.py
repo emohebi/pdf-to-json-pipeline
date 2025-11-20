@@ -48,6 +48,13 @@ class SectionDetectionAgent:
 
                 CRITICAL RULES FOR SECTION NAMES:
                 - section_name MUST be the EXACT text of the section heading/title from the document
+                - Exception: If you see either "Pre-Task Activities" or "Post-Task Activities" sections then consider them as the "Task Activities" section
+                - Examples of CORRECT extraction:
+                  * Document shows: "Pre-Task Activities" → section_name: "Task Activities"
+                  * Document shows: "Post-Task Activities" → section_name: "Task Activities"
+                  * Document shows: "2.1 Material Risks and Controls" → section_name: "2.1 Material Risks and Controls"
+                  * Document shows: "SAFETY" → section_name: "SAFETY"
+                  * Document shows: "Pre-Task Activities" → section_name: "Task Activities"
                 - DO NOT create descriptive names or paraphrase
                 - DO NOT generate names based on content
                 - Copy the section heading EXACTLY as written (preserving capitalization, punctuation, numbers, etc.)
@@ -317,7 +324,32 @@ IMPORTANT - UNDERSTAND THE DIFFERENCE:
    - These appear INSIDE the "Task Activities" section
    - DO NOT treat these as separate sections
 
-CRITICAL: Extract section names EXACTLY as they appear in the document headings/titles.
+CRITICAL RULES:
+1. section_name MUST be the EXACT text of the DOCUMENT SECTION heading
+- Exception: If you see either "Pre-Task Activities" or "Post-Task Activities" sections then consider them in the "Task Activities" section
+- Example of document having "Pre-Task Activities" or "Post-Task Activities" sections:
+    [Pre-Task Activities] --> "Task Activities" boundary starts here
+
+    [Task Activities]
+
+    [Post-Task Activities]
+
+    [Next Section] --> "Task Activities" boundary ends here
+- Do NOT Add "Pre-Task Activities" or "Post-Task Activities" sections to "unhandled_content"
+
+2. DO NOT treat numbered sequences (like "1 JOB PREPARATION") as sections
+3. Numbered sequences belong INSIDE the "Task Activities" section
+4. Look for major document divisions, not task steps
+5. Examples of CORRECT section identification:
+   - "SAFETY" (a document section)
+   - "Material Risks and Controls" (a document section)
+   - "Task Activities" (a document section that contains numbered sequences)
+   - "Additional PPE Required" (a document section)
+6. Examples of INCORRECT section identification:
+   - "1 JOB PREPARATION" ❌ (this is a sequence, not a section)
+   - "2 OPERATION" ❌ (this is a sequence, not a section)
+   - "Step 1" ❌ (this is a step, not a section)
+7. If no heading is visible, use "Untitled Section [page X]"
 
 """+"""
 Return ONLY a JSON array with this exact structure:
@@ -332,22 +364,6 @@ Return ONLY a JSON array with this exact structure:
     }
 ]
 """ + f"""
-
-CRITICAL RULES:
-1. section_name MUST be the EXACT text of the DOCUMENT SECTION heading
-2. DO NOT treat numbered sequences (like "1 JOB PREPARATION") as sections
-3. Numbered sequences belong INSIDE the "Task Activities" section
-4. Look for major document divisions, not task steps
-5. Examples of CORRECT section identification:
-   - "SAFETY" (a document section)
-   - "Material Risks and Controls" (a document section)
-   - "Task Activities" (a document section that contains numbered sequences)
-   - "Additional PPE Required" (a document section)
-6. Examples of INCORRECT section identification:
-   - "1 JOB PREPARATION" ❌ (this is a sequence, not a section)
-   - "2 OPERATION" ❌ (this is a sequence, not a section)
-   - "Step 1" ❌ (this is a step, not a section)
-7. If no heading is visible, use "Untitled Section [page X]"
 
 Requirements:
 - Sections must not overlap
@@ -400,6 +416,16 @@ Examples:
 - Document shows section heading "Task Activities" → section_name: "Task Activities" ✓
 - Document shows numbered item "1 JOB PREPARATION" → IGNORE IT, it's not a section ✗
 - Document shows numbered item "2 OPERATION" → IGNORE IT, it's not a section ✗
+- Exception: If you see either "Pre-Task Activities" or "Post-Task Activities" sections then consider them in the "Task Activities" section
+- Example of document having "Pre-Task Activities" or "Post-Task Activities" sections:
+    [Pre-Task Activities] --> "Task Activities" boundary starts here
+
+    [Task Activities]
+
+    [Post-Task Activities]
+
+    [Next Section] --> "Task Activities" boundary ends here
+- Do NOT Add "Pre-Task Activities" or "Post-Task Activities" sections to "unhandled_content"
 
 """+"""
 Return ONLY a JSON array with this exact structure:

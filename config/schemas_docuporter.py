@@ -43,7 +43,7 @@ DOCUMENT_HEADER_SCHEMA = {
 SECTION_DEFINITIONS = {
     'safety': 'Safety information section including icons, statements, and additional safety notes',
     'material_risks_and_controls': 'Material risks and their associated critical controls',
-    'task_activities': 'Task activities with sequences and steps in flat structure',
+    'task_activities': 'Task activities, including Pre-Task Activities and Post-Task Activities, with sequences and steps in flat structure',
     'additional_controls_required': 'Additional controls required with control types and reasons',
     'additional_ppe_required': 'Additional personal protective equipment (PPE) required',
     'specific_competencies_knowledge_and_skills': 'Specific competencies, knowledge and skills required',

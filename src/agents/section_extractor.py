@@ -345,6 +345,7 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
             logger.error(
                 f"[{document_id}] Failed to extract {section_info['section_name']}: {e}"
             )
+            logger.error(f"RESPONSE: {response}")
             raise
 
     def _build_doc_classification_prompt(
@@ -506,7 +507,18 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
                     - First sequence: sequence_name: "First TITLE" and sequence_no: "", steps a., b., 1.1, 1.2, execution_condition: "Pre-Isolation"
                     - Second sequence: sequence_name: "Second TITLE" and sequence_no: "", steps 2.1, 2.2, execution_condition: "Pre-Isolation"
 
-                3. Count how many sequences you will create before starting extraction
+                3. If you see "Pre-Task Activities" title then create a sequence with sequence_name: "Pre-Task Activities" where all other fields MUST be empty.
+                    Example:
+                    [BOLD] PRE-TASK ACTIVITIES --> [FIRST BOUNDARY]
+                    [BOLD] Title --> [SECOND BOUNDARY]
+                    1. Step one
+                    2. Step two
+
+                    Result:
+                    - First sequence: sequence_name: "PRE-TASK ACTIVITIES" and sequence_no is empty, NO steps (empty step fields), No other fields
+                    - Second sequence: sequence_name: "Title" and sequence_no is empty, Steps 1 and 2 (ONLY in this sequence)
+
+                4. Count how many sequences you will create before starting extraction
 
                 """
         else:
@@ -562,6 +574,17 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
                     - Second sequence: sequence_name: "Equipment Name 2" and sequence_no is empty, Steps 1 and 2 (ONLY in this sequence) and [Table with maintainable items]
                     - Third sequence: both sequence_name and sequence_no are empty, Steps 3 and 4 (ONLY in this sequence) and NO maintainable items
 
+                - SCENARIO 3: If you see "Pre-Task Activities" title then create a sequence with sequence_name: "Pre-Task Activities" and all other sequence fields MUST be empty.
+                    Example:
+                    [BOLD] PRE-TASK ACTIVITIES --> [FIRST BOUNDARY]
+                    [BOLD] Title --> [SECOND BOUNDARY]
+                    1. Step one
+                    2. Step two
+
+                    Result:
+                    - First sequence: sequence_name: "PRE-TASK ACTIVITIES" and sequence_no is empty, NO steps (empty step fields), No other fields
+                    - Second sequence: sequence_name: "Title" and sequence_no is empty, Steps 1 and 2 (ONLY in this sequence)
+
             3. If the sequence has sequence_name but not maintainable items then DUPLICATE sequence_name to maintainable_item like example below and above:
             
             Example - CORRECT extraction:
@@ -607,11 +630,24 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
 
             4. NEVER mix content, including maintainable items, across these boundaries
             5. Count how many sequences you will create before starting extraction
+            
             """
         prompt += f"""
         -----------------------------------------------
         CRITIAL GENERAL RULES:
         -----------------------------------------------
+        ⚠️ CRITICAL PARAGRAPH RULE:
+        - If you see the text has continued to the next paragraph (or new line) then create a new text field object
+        Example:
+        [Paragraph 1]
+
+        [Paragraph 2]
+        Result:
+        [
+            {{"orig_text": "Paragraph 1", "text": "Paragraph 1"}},
+            {{"orig_text": "Paragraph 2", "text": "Paragraph 2"}}
+        ]
+
         ⚠️ CRITICAL FIELD DUPLICATION RULE:
         ALL fields with "orig_" prefix must have the SAME value as their corresponding field:
         - orig_text = text (exact same value)

@@ -106,7 +106,7 @@ class ImageDescriptor:
         )
         
         descriptions_dict = {}
-        
+        len_images = len(section_images)
         for idx, img in enumerate(section_images, 1):
             try:
                 # Generate context-aware description based on section type
@@ -115,7 +115,8 @@ class ImageDescriptor:
                     idx,
                     section_type,
                     section_name,
-                    document_id
+                    description_len = 30 if len_images <=30 else 10,
+                    document_id = document_id
                 )
                 
                 # Ensure unique keys
@@ -210,6 +211,7 @@ Return ONLY the short description, nothing else:"""
         index: int,
         section_type: str,
         section_name: str,
+        description_len = 30,
         document_id: str = None
     ) -> str:
         """
@@ -263,9 +265,9 @@ Describe what it shows or depicts."""
 
 {context}
 
-Provide a detailed, SPECIFIC description which clearly describes the image for a computer vision model. 
+Provide a detailed, SPECIFIC description (Maximum {description_len} words) which clearly describes the image for a computer vision model. 
 If you see any text or object's colors in the image please explain them for better matching accuracy.
-Return ONLY the description:"""
+Return ONLY the description, which MUST be less than {description_len} words long:"""
             
             description = invoke_bedrock_vision(
                 image_data=image_b64,

@@ -63,7 +63,7 @@ class BedrockClient:
         # Configure retry and timeout settings
         config = boto_Config(
             retries={"total_max_attempts": 20, "mode": "standard"},
-            read_timeout=1000
+            read_timeout=3600
         )
         
         # Determine service and endpoint

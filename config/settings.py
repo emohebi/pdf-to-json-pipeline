@@ -38,7 +38,7 @@ BEDROCK_MODEL_ID = os.getenv(
 BEDROCK_MODEL_REGION = os.getenv('BEDROCK_MODEL_REGION', 'us-east-1')
 BEDROCK_NAMESPACE: str = "swscraping"
 MODEL_ID_37: str = "apac.anthropic.claude-3-7-sonnet-20250219-v1:0"
-MODEL_ID_40: str = "apac.anthropic.claude-sonnet-4-20250514-v1:0"
+MODEL_ID_40: str = "apac.anthropic.claude-sonnet-4-20250514-v1:0"# "au.anthropic.claude-sonnet-4-5-20250929-v1:0"
 MODEL = MODEL_ID_40
 
 # Processing Configuration
@@ -61,7 +61,7 @@ VERBOSE = os.getenv('VERBOSE', 'True').lower() == 'true'
 # Model parameters
 MODEL_TEMPERATURE = 0  # Deterministic for extraction
 MODEL_MAX_TOKENS_DETECTION = 4096
-MODEL_MAX_TOKENS_EXTRACTION = 26000
+MODEL_MAX_TOKENS_EXTRACTION = 56000
 MODEL_MAX_TOKENS_VALIDATION = 8192
 
 # Processing modes
