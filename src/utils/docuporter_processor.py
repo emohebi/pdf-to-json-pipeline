@@ -167,6 +167,14 @@ def fix_task_activities_sequences(task_activities: List[Dict]) -> List[Dict]:
             no_text = sequence_no.get('text', '')
         else:
             no_text = str(sequence_no)
+
+        required_fields = [
+                'step_no', 'equipment_asset'
+            ]
+            
+        for field in required_fields:
+            if field not in item or not item[field]:
+                item[field] = {"orig_text": "", "text": ""}
         
         # Check if it's a sub-heading pattern
         sub_heading_patterns = [

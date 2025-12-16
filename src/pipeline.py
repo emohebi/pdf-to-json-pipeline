@@ -44,23 +44,23 @@ class PDFToJSONPipeline:
             pages_data=pages_data
         )
         
-        total_issues = sum(
-            len(issues) 
-            for key, issues in review_results.items() 
-            if key != 'error' and isinstance(issues, list)
-        )
+        # total_issues = sum(
+        #     len(issues) 
+        #     for key, issues in review_results.items() 
+        #     if key != 'error' and isinstance(issues, list)
+        # )
         
-        if total_issues == 0:
-            logger.info(f"Review PASSED - No issues found")
-        else:
-            logger.warning(f"Review found {total_issues} issue(s):")
-            logger.warning(f"    - Incomplete sentences: {len(review_results.get('incomplete_sentences', []))}")
-            logger.warning(f"    - Duplications: {len(review_results.get('duplications', []))}")
-            logger.warning(f"    - Order issues: {len(review_results.get('order_issues', []))}")
-            logger.warning(f"    - Missing information: {len(review_results.get('missing_information', []))}")
-        return review_results, total_issues
+        # if total_issues == 0:
+        #     logger.info(f"Review PASSED - No issues found")
+        # else:
+        #     logger.warning(f"Review found {total_issues} issue(s):")
+        #     logger.warning(f"    - Incomplete sentences: {len(review_results.get('incomplete_sentences', []))}")
+        #     logger.warning(f"    - Duplications: {len(review_results.get('duplications', []))}")
+        #     logger.warning(f"    - Order issues: {len(review_results.get('order_issues', []))}")
+        #     logger.warning(f"    - Missing information: {len(review_results.get('missing_information', []))}")
+        return review_results, None
     
-    def process_single_pdf(self, pdf_path: str, parallel: bool = False, review_json: str = None) -> Dict:
+    def process_single_pdf(self, pdf_path: str, parallel: bool = False, review_json: str = None, review: bool = False) -> Dict:
         """Process a single PDF document with image extraction."""
         pdf_path = Path(pdf_path)
         document_id = pdf_path.stem
@@ -98,13 +98,15 @@ class PDFToJSONPipeline:
             
             logger.info(f"Extracted {len(section_jsons)} sections")
 
-            # STAGE 3.75: Review extracted content
-            logger.info("STAGE 3.75: Reviewing extracted content...")
-            review_results, total_issues = self.call_review_agent(
-                section_jsons=section_jsons,
-                document_id=document_id,
-                pages_data=pages_data
-            )
+            review_results, total_issues = ({}, {})
+            if review:
+                # STAGE 3.75: Review extracted content
+                logger.info("STAGE 3.75: Reviewing extracted content...")
+                review_results, total_issues = self.call_review_agent(
+                    section_jsons=section_jsons,
+                    document_id=document_id,
+                    pages_data=pages_data
+                )
             
             # STAGE 4: Validate and combine
             logger.info("STAGE 4: Validating and combining...")
@@ -117,11 +119,11 @@ class PDFToJSONPipeline:
                 'total_images_extracted': len(self.extracted_images),
                 'processing_timestamp': datetime.now().isoformat(),
                 'processing_duration': duration,
-                'model_used': 'claude-sonnet-4',
+                'model_used': MODEL,
                 'extraction_mode': 'precise_positioning',
-                'review_results': review_results,
-                'review_passed': total_issues == 0,
-                'review_issues_count': total_issues
+                'review_results': review_results
+                # 'review_passed': total_issues == 0,
+                # 'review_issues_count': total_issues
             }
             
             header_extractor = DocumentHeaderExtractor()

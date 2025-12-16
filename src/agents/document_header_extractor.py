@@ -53,7 +53,7 @@ class DocumentHeaderExtractor:
             header_data = self._parse_header_response(response)
             
             # Add document ID and sections list
-            header_data['Sections'] = []
+            # header_data['Sections'] = []
             
             logger.info(f"[{document_id}] Successfully extracted document header")
             return header_data
@@ -111,7 +111,8 @@ EXTRACTION RULES:
 1. Look for labeled fields (e.g., "Document No:", "Version:", "Type:", etc.)
 2. Extract the EXACT text - do not paraphrase or modify
 3. Both "orig_text" and "text" should have the SAME value
-4. If a field is not found, use empty strings for both orig_text and text
+4. If a field is not found, use empty strings for both orig_text and text -> {"orig_text": "", "text": ""}
+    Example: "purpose": {"orig_text": "", "text": ""}
 5. Common locations:
    - Headers and footers
    - Title blocks
@@ -144,12 +145,12 @@ Return ONLY the JSON object (no markdown, start with {):
             
             # Validate structure and ensure all fields exist
             required_fields = [
-                'Document_Source', 'Document_Type', 'Document_Number',
-                'Document_Version_Number', 'Work_Description', 'Purpose'
+                'document_source', 'document_type', 'document_number',
+                'document_version_number', 'work_description', 'purpose'
             ]
             
             for field in required_fields:
-                if field not in header_data:
+                if field not in header_data or not header_data[field]:
                     header_data[field] = {"orig_text": "", "text": ""}
                 elif not isinstance(header_data[field], dict):
                     # Convert to proper structure

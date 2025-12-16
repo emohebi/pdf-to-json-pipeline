@@ -199,6 +199,7 @@ CRITICAL RULES FOR TEXT EXTRACTION:
   - Original punctuation
   - Numbers and codes as written
   - Special characters and symbols
+  - Use ONLY ASCII characters (0-127) - replace unicode (- → -, • → *) with ASCII equivalents
 ✗ DO NOT paraphrase or reword any text
 ✗ DO NOT summarize or shorten text
 ✗ DO NOT correct spelling or grammar
@@ -305,7 +306,12 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
                 prompt=prompt,
                 max_tokens=MODEL_MAX_TOKENS_EXTRACTION
             )
+            import unicodedata
+            response = unicodedata.normalize("NFKD", response)
             
+            from ftfy import fix_text
+            response = fix_text(response)
+
             section_json = self._parse_extraction_response(response)
 
             # section_json = self._validate_and_fix_schema(section_json, self.section_schema)
@@ -462,50 +468,70 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
                 - The squences are [BOLD] titles sometimes numerated (e.g., "1 JOB PREPARATION", "2 OPERATION") and sometimes NOT (e.g. "Pneumatic Maintenance Unit CV203"), these are sequence dividers.
                 - If the sequences are numerated, the steps are likely 1.1, 1.2 ... or a., b., ...
                 - If the sequences are not numerated, then the steps are likely 1., 2., ... or a., b., ... 
+                - Sequences are usually in a table with columns "No.", "Task Steps", "Photo or Diagram" and "Notes".
                 
-                2. LOOK FOR SUB-HEADINGS (If available):
-                - The sub-headings are about execution conditions e.g., "Tasks to be done under Isolation", "Pre-Isolation Tasks", "Post-Isolation .."
-                - These are NOT sequences themselves but they determine execution_condition in the next available sequence.
+                2. LOOK FOR SUB-HEADINGS with black background not in a table (If available):
+                - The sub-headings are about running or execution conditions e.g., "Tasks to be done under Isolation", "Pre-Isolation Tasks", "Post-Isolation Tasks", "De-Isolation Tasks".
+                - These are sequences with empty sequence_no and they determine execution_condition in the next available sequences.
                 - When you encounter sub-headings, infer the execution_condition for all sequences under them until you reach the next sub-heading.
-                - "Tasks to be done under Isolation" → execution_condition: {{"orig_text": "Isolated", "text": "Isolated"}}
+                - "Tasks to be done under Isolation" → execution_condition: {{"orig_text": "Isolation", "text": "Isolation"}}
                 - "Pre-Isolation Tasks" → execution_condition: {{"orig_text": "Pre-Isolation", "text": "Pre-Isolation"}}
                 - "Post-Isolation Tasks" → execution_condition: {{"orig_text": "Post-Isolation", "text": "Post-Isolation"}}
                 - "De-Isolation Tasks" → execution_condition: {{"orig_text": "De-Isolation", "text": "De-Isolation"}}
                 - Normal conditions → execution_condition: {{"orig_text": "", "text": ""}}
                 
                     2.1. SUB-ITEMS under sub-headings (e.g., a., b., c., or 1a, 1b, 1c):
-                    - These usually come right after the sub-headings and before the next sequence
-                    - These are steps to be assgined to the next available sequence.
+                    - These usually start with a., b., c., or 1a, 1b, 1c
+                    - These usually come right after the sub-headings and before the next sequence (Do not mistake them with NEXT SEQUENCE, think carefully)
+                    - These are steps to be assgined to the sub-headings.
+                    - If they are not available then the steps are EMPTY (Example 3 below)
+                    CRITICAL: SUB-ITEMS DO NOT START with 1., 2., 3., if you see these numbering they are NEXT Sequence
 
                 Example 1 (Numerated Sequences):
-                    "Task to be done under Isolation" --> [INFER execution_condition]
+                    "Task to be done under Isolation" --> [FIRST BOUNDARY, INFER execution_condition]
                     a. step --> [SUB-ITEM]
                     b. step --> [SUB-ITEM]
-                    [BOLD] 1. First TITLE --> [FIRST BOUNDARY]
+                    [BOLD] 1. Second TITLE --> [SECOND BOUNDARY]
                     1.1 Step one
                     1.2 Step two
-                    [BOLD] 2. Second TITLE --> [SECOND BOUNDARY]
+                    [BOLD] 2. Third TITLE --> [THIRD BOUNDARY]
                     1.1 Step one
                     1.2 Step two
 
                     Result:
-                    - First sequence: sequence_name: "First TITLE" and sequence_no: "1", steps a., b., 1.1, 1.2, execution_condition: "Isolated"
-                    - Second sequence: sequence_name: "Second TITLE" and sequence_no: "2", steps 2.1, 2.2, execution_condition: "Isolated"
+                    - First sequence: sequence_name: "Task to be done under Isolation" and sequence_no: "", steps a., b., execution_condition: "Isolation"
+                    - Second sequence: sequence_name: "Second TITLE" and sequence_no: "1", steps 1.1, 1.2, execution_condition: "Isolation"
+                    - Third sequence: sequence_name: "Third TITLE" and sequence_no: "2", steps 2.1, 2.2, execution_condition: "Isolation"
 
                 Example 2 (NOT Numerated Sequences):
-                    "Pre-Isolation Tasks (or similar sentence)" --> [INFER execution_condition]
+                    "Pre-Isolation Tasks (or similar sentence)" --> [FIRST BOUNDARY, INFER execution_condition]
                     a. step --> [SUB-ITEM]
                     b. step --> [SUB-ITEM]
-                    [BOLD] First TITLE --> [FIRST BOUNDARY]
+                    [BOLD] Second TITLE --> [SECOND BOUNDARY]
                     1 Step one
                     2 Step two
-                    [BOLD] Second TITLE --> [SECOND BOUNDARY]
+                    [BOLD] Third TITLE --> [THIRD BOUNDARY]
                     3 Step one
                     4 Step two
 
                     Result:
-                    - First sequence: sequence_name: "First TITLE" and sequence_no: "", steps a., b., 1.1, 1.2, execution_condition: "Pre-Isolation"
-                    - Second sequence: sequence_name: "Second TITLE" and sequence_no: "", steps 2.1, 2.2, execution_condition: "Pre-Isolation"
+                    - First sequence: sequence_name: "Pre-Isolation Tasks (or similar sentence)" and sequence_no: "", steps a., b., execution_condition: "Pre-Isolation"
+                    - Second sequence: sequence_name: "Second TITLE" and sequence_no: "", steps 1.1, 1.2, execution_condition: "Pre-Isolation"
+                    - Third sequence: sequence_name: "Third TITLE" and sequence_no: "", steps 2.1, 2.2, execution_condition: "Pre-Isolation"
+
+                Example 3 (SUB ITEMS sre not available):
+                    "Task to be done under Isolation" --> [FIRST BOUNDARY, INFER execution_condition]
+                    [BOLD] 1. Second TITLE --> [SECOND BOUNDARY]
+                    1.1 Step one
+                    1.2 Step two
+                    [BOLD] 2. Third TITLE --> [THIRD BOUNDARY]
+                    1.1 Step one
+                    1.2 Step two
+
+                    Result:
+                    - First sequence: sequence_name: "Task to be done under Isolation" and sequence_no: "", steps are empty fields, execution_condition: "Isolation"
+                    - Second sequence: sequence_name: "Second TITLE" and sequence_no: "1", steps 1.1, 1.2, execution_condition: "Isolation"
+                    - Third sequence: sequence_name: "Third TITLE" and sequence_no: "2", steps 2.1, 2.2, execution_condition: "Isolation"
 
                 3. If you see "Pre-Task Activities" title then create a sequence with sequence_name: "Pre-Task Activities" where all other fields MUST be empty.
                     Example:
@@ -519,14 +545,15 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
                     - Second sequence: sequence_name: "Title" and sequence_no is empty, Steps 1 and 2 (ONLY in this sequence)
 
                 4. Count how many sequences you will create before starting extraction
-
+                
                 """
-        else:
+        else: #PMI
             prompt += f"""
             FIRST STEP (SEQUENCE EXTRACTION or POPULATION):
             ⚠️ CRITICAL MAINTAINABLE ITEMS RULES - PREVENTIVE TASK DESCRIPTION SCENARIOS:
             When you see "Preventive Task Description" in headers/tables or document is about maintainable items:
             1. Scan for all "The following Tasks are applicable to all the maintenance items listed below" and [BOLD] titles, these are sequence dividers.
+             1.1 ⚠️ CRITICAL: make sure the maintainable items are reported for the all steps of the sequence.
             2. If found, there are the following two scenarios:
             - SCENARIO 1: You see "The following Tasks are applicable to all the maintenance items listed below" alone without a [BOLD] title right AFTER it then it is a sequence
             without both sequence_no and sequence_name.
@@ -544,16 +571,16 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
 
                 Example 2:
                     "The following Tasks..." --> [FIRST BOUNDARY]
-                    [Table with maintainable items]
+                    [Table with maintainable items 1]
                     1. Step one
                     2. Step two
                     [BOLD] Equipment Name --> [SECOND BOUNDARY]
                     [No steps here]
-                    [Table with maintainable items]
+                    [Table with maintainable items 2]
                     
                     Result:
-                    - First sequence: both sequence_name and sequence_no are empty, Steps 1 and 2 (ONLY in this sequence) and [Table with maintainable items]
-                    - Second sequence: sequence_name: "Equipment Name" and sequence_no is empty, NO steps (empty step fields) and [Table with maintainable items]
+                    - First sequence: both sequence_name and sequence_no are empty, Steps 1 and 2 (ONLY in this sequence) and [Table with maintainable items 1]
+                    - Second sequence: sequence_name: "Equipment Name" and sequence_no is empty, NO steps (empty step fields) and [Table with maintainable items 2]
 
                 - SCENARIO 2: You see "The following Tasks are applicable to all the maintenance items listed below" with a [BOLD] title right AFTER it then it is a sequence
             with a sequence_name as the [BOLD] title.
@@ -562,19 +589,26 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
                     [No steps here]
                     "The following Tasks..." --> [SECOND BOUNDARY]
                     [BOLD] Equipment Name 2
-                    [Table with maintainable items]
+                    [Table with maintainable items 1]
                     1. Step one
                     2. Step two
                     "The following Tasks..." --> [THIRD BOUNDARY]
                     3. Step one
                     4. Step two
+                    [Table with maintainable items 2]
+                    "The following Tasks..." --> [FORTH BOUNDARY]
+                    5. Step one
+                    6. Step two
                     
                     Result:
                     - First sequence: sequence_name: "Equipment Name" and sequence_no is empty, NO steps (empty step fields), maintainable item: "Equipment Name"
-                    - Second sequence: sequence_name: "Equipment Name 2" and sequence_no is empty, Steps 1 and 2 (ONLY in this sequence) and [Table with maintainable items]
-                    - Third sequence: both sequence_name and sequence_no are empty, Steps 3 and 4 (ONLY in this sequence) and NO maintainable items
+                    - Second sequence: sequence_name: "Equipment Name 2" and sequence_no is empty, Steps 1 and 2 (ONLY in this sequence) and [Table with maintainable items 1]
+                    - Third sequence: both sequence_name and sequence_no are empty, Steps 3 and 4 (ONLY in this sequence) and [Table with maintainable items 2]
+                    - Forth sequence: both sequence_name and sequence_no are empty, Steps 5 and 6 (ONLY in this sequence) and NO maintainable items
 
-                - SCENARIO 3: If you see "Pre-Task Activities" title then create a sequence with sequence_name: "Pre-Task Activities" and all other sequence fields MUST be empty.
+                2.1 ⚠️ CRITICAL: Define the sequence boundary, then Report the maintainable items (if found within the sequence boundary) ONLY for the steps belong to the sequence.
+                2.2 A sequnce might spread between pages therefore carefully define the sequence boundary (think if the maintainable items are actually belong to the sequence)
+            3. If "Pre-Task Activities" title found then create a sequence with sequence_name: "Pre-Task Activities" and all other sequence fields MUST be empty.
                     Example:
                     [BOLD] PRE-TASK ACTIVITIES --> [FIRST BOUNDARY]
                     [BOLD] Title --> [SECOND BOUNDARY]
@@ -585,7 +619,30 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
                     - First sequence: sequence_name: "PRE-TASK ACTIVITIES" and sequence_no is empty, NO steps (empty step fields), No other fields
                     - Second sequence: sequence_name: "Title" and sequence_no is empty, Steps 1 and 2 (ONLY in this sequence)
 
-            3. If the sequence has sequence_name but not maintainable items then DUPLICATE sequence_name to maintainable_item like example below and above:
+            4. If "Post-Task Activities" title found then create a sequence with sequence_name: "Post-Task Activities" and all other sequence fields MUST be empty.
+                    Example:
+                    [BOLD] POST-TASK ACTIVITIES --> [FIRST BOUNDARY]
+                    [BOLD] Title --> [SECOND BOUNDARY]
+                    1. Step one
+                    2. Step two
+
+                    Result:
+                    - First sequence: sequence_name: "POST-TASK ACTIVITIES" and sequence_no is empty, NO steps (empty step fields), No other fields
+                    - Second sequence: sequence_name: "Title" and sequence_no is empty, Steps 1 and 2 (ONLY in this sequence)
+
+            5. If "Execution Condition" title found then the "execution_condition" of all the sequences after this should be infered and populated until it reaches another execution condition.
+                    Example:
+                    [BOLD] Execution Condition     Running --> [FIRST BOUNDARY]
+                    a. step
+                    [BOLD] Title --> [SECOND BOUNDARY]
+                    1. Step one
+                    2. Step two
+
+                    Result:
+                    - First sequence: sequence_name: "Running" and sequence_no is empty, step a. (only in this sequence), execution_condition: "Running"
+                    - Second sequence: sequence_name: "Title" and sequence_no is empty, Steps 1 and 2 (ONLY in this sequence), execution_condition: "Running"
+
+            6. If the sequence has sequence_name but not maintainable items then DUPLICATE sequence_name to maintainable_item like example below and above:
             
             Example - CORRECT extraction:
             Document structure:
@@ -628,10 +685,11 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
             // ... steps
             }}
 
-            4. NEVER mix content, including maintainable items, across these boundaries
-            5. Count how many sequences you will create before starting extraction
+            7. NEVER mix content, including maintainable items, across these boundaries
+            8. Count how many sequences you will create before starting extraction
             
             """
+        # General
         prompt += f"""
         -----------------------------------------------
         CRITIAL GENERAL RULES:
@@ -661,33 +719,46 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
         ⚠️ CRITICAL STEP ASSIGNMENT: 
         - Steps belong ONLY to the sequence where they physically appear in the document
         - If no steps exist between the current sequence and next sequence..." → the current sequence has NO steps
-        - DO NOT copy steps after next sequence into any other sequences
         - Each step appears in EXACTLY ONE sequence
+
+        ⚠️ CRITICAL STEP EXTRACTION:
+        - If you DO NOT see boundary line between "TASK STEPS" and "NOTES" columns, then put the EXTRACTED text in the "step_description" NOT the "notes".
+        - When extracting step of a sequence, if the step description continues onto the next page, it is treated as part of the same step number. 
+            Example: 
+            1. TITLE ---> Sequence
+            1.1 Step ---> STEP 1.1 Boundary
+            Step Description
+
+            [Page Break]
+
+            Step Description continued --> [concat it to the step 1.1 description]
+
+            1.2 Step ---> STEP 1.2 Boundary
+            Step 1.2 description
+
+        ⚠️ CRITICAL GENERAL RULE:
+        - Do not populate "equipment_asset" field in the task activities.
 
         --------------------------
         CRITICAL EXTRACTION RULES:
         --------------------------
-        1. DOCUMENT TYPE DETECTION:
-        - Check for document type "WIN" or "PMI"
-        - If found or document is a "WIN" document the use "RULES FOR "WIN" DOCUMENTS only" rules above
-        - Otherwise → use use "RULES FOR "PMI" DOCUMENTS only" rules above
-
-        2. FIELD VALUE DUPLICATION:
+        1. FIELD VALUE DUPLICATION:
         - ALWAYS duplicate values: orig_text = text, orig_image = image
         - Never leave one empty if the other has value
 
-        3. EMPTY FIELD HANDLING:
+        2. EMPTY FIELD HANDLING:
         - If both text and image are empty → field can be empty array [] or empty dict {{}}
         - Empty arrays: [] instead of [{{"orig_text": "", "text": ""}}]
         - Empty dicts: {{}} instead of {{"orig_text": "", "text": ""}}
 
-        4. IMAGE PLACEMENT BY COLUMN:
+        3. IMAGE PLACEMENT BY COLUMN:
         - Map images to fields based on table column
         - Don't put all images in one field
 
-        5. TEXT EXTRACTION:
+        4. TEXT EXTRACTION:
         - Extract TEXT from icons, don't describe them
         - Extract exact text, don't paraphrase or generate random words
+        - Use ONLY ASCII characters (0-127) - replace unicode (- → --, - → -, • → *) with ASCII equivalents
 
         -----------------
         EXTRACTION STEPS:
@@ -696,15 +767,15 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
         """
         if doc_type == "WIN":
             prompt += f"""
-            1.1. For "WIN" documents:
+            1.1. For this document:
             - Follow standard numbering (1, 1.1, 1.2,.. or 1., 2, 3...)
             - Check for special patterns (sub-headings, sub-items)
-            - Set execution_condition based on sub-heading context
-            - Assign sub-heading items to the next available sequence
+            - Sub-headings are separate Sequence with sub items as steps (if available)
+            - Set execution_condition based on sub-heading context for all next sequences until next sub-heading 
             """
         else:
             prompt += f"""
-            1.1. For "PMI" documents:
+            1.1. For this document:
             - Look for "Preventive Task Description" in headers/tables
             - Look for maintainable items patterns
             - Look for bold equipment/component names
@@ -727,6 +798,8 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
                 - If no table BEFORE next sequence but have sequence_name → duplicate to maintainable_item
                 - After "The following Tasks..." → start NEW sequence with its own rules
                 - Content AFTER "The following Tasks..." NEVER belongs to previous sequences
+
+            1.2. "Pre" or "Post" activities (if available) MUST be extracted
             """
         prompt += f""" 
         2. Make sure:
@@ -803,24 +876,65 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
        - {{"orig_text": "", "text": ""}} → {{}}
        - But if either has value, keep the structure
 
+    4. ⚠️ CRITICAL PARAGRAPH RULE:
+        - If you see the text has continued to the next paragraph (or new line) then create a new text field object
+        Example:
+        [Paragraph 1]
+        [Paragraph 2]
+
+        Result:
+        [
+            {{"orig_text": "Paragraph 1", "text": "Paragraph 1"}},
+            {{"orig_text": "Paragraph 2", "text": "Paragraph 2"}}
+        ]
+
     DEFAULT VALUES FOR FIELDS WITH CONTENT:
     - String fields with value: {{"orig_text": "value", "text": "value"}}
     - Image fields with path: {{"orig_image": "path", "image": "path"}}
     - Empty fields: {{}} or []
+        Exceptions:
+        - "step_no": {{}} → "step_no": {{"orig_text": "", "text": ""}}
+        - "equipment_asset": {{}} → "equipment_asset": {{"orig_text": "", "text": ""}}
 
     CRITICAL IMAGE PLACEMENT RULES:
     - If document has a table structure, place images in fields matching their table columns
     - Don't put all images in one field - distribute based on column context
     - Extract TEXT FROM INSIDE icons/images, do NOT describe them
+    - Put "Risk Description" as "text" for the image in "Risk" column 
     - Multiple images in same column = multiple list entries in that field
 
     CRITICAL EXTRACTION RULES:
     - Extract ALL text EXACTLY as written below the section "{section_info['section_name']}" but before next section: "{next_section_name}"
+    ⚠️ CRITICAL SECTION EXTRACTION (including tables):
+        Look at ALL pages ({section_info['start_page']} to {section_info['end_page']})
+        You might see several section name: "{section_info['section_name']}" 
+        - When extracting section, if the section continues onto the next page, it is treated as part of the same section. 
+            Example: 
+            "{section_info['section_name']}"  ---> Section 1
+
+            [Page Break]
+
+            "{section_info['section_name']}"  (if found) ---> [concat it to the Section 1]
+
+            "{next_section_name}" ---> Next Section
     - Do not paraphrase or reword
     - Copy text word-for-word from the section
     - Preserve original spelling, capitalization, and punctuation
+    - Use ONLY ASCII characters (0-127) - replace unicode (- → --, - → -, • → *) with ASCII equivalents
     - For images: Use the paths provided above
     - Place images in the field that matches their TABLE COLUMN position
+    ⚠️ CRITICAL PARAGRAPH RULE:
+        - If you see the text has continued to the next paragraph (or new line) then create a new text field object
+        Example:
+        [Paragraph 1]
+
+        [Paragraph 2]
+        Result:
+        [
+            {{"orig_text": "Paragraph 1", "text": "Paragraph 1"}},
+            {{"orig_text": "Paragraph 2", "text": "Paragraph 2"}}
+        ]
+    
 
     EXTRACTION STEPS:
     1. Look at ALL pages shown ({section_info['start_page']} to {section_info['end_page']})

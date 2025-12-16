@@ -142,7 +142,7 @@ class ValidationAgentDocuPorter:
                 document_json[section_type] = self._get_empty_section(section_type)
         
         # Clean empty fields
-        document_json = clean_empty_fields(document_json)
+        # document_json = clean_empty_fields(document_json)
         
         # Calculate confidence
         confidences = [

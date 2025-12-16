@@ -418,13 +418,14 @@ Examples:
 - Document shows numbered item "2 OPERATION" → IGNORE IT, it's not a section ✗
 - Exception: If you see either "Pre-Task Activities" or "Post-Task Activities" sections then consider them in the "Task Activities" section
 - Example of document having "Pre-Task Activities" or "Post-Task Activities" sections:
-    [Pre-Task Activities] --> "Task Activities" boundary starts here
+    [BOLD] Pre-Task Activities --> ["Task Activities" boundary starts here]
 
-    [Task Activities]
+    [BOLD] Task Activities
 
-    [Post-Task Activities]
+    [BOLD] Post-Task Activities
 
-    [Next Section] --> "Task Activities" boundary ends here
+    [BOLD] Next Section --> ["Task Activities" boundary ends here]
+  NOTE: Do not report the "Pre-Task Activities" and "Post-Task Activities" separately, include them in the task activities.
 - Do NOT Add "Pre-Task Activities" or "Post-Task Activities" sections to "unhandled_content"
 
 """+"""
@@ -446,6 +447,7 @@ RULES:
 - If a section ends after {end_page}, use {end_page} as end_page
 - All pages {start_page}-{end_page} must be covered
 - section_name MUST be the exact SECTION heading text, not numbered sequences
+- Use ONLY ASCII characters (0-127) - replace unicode (- → -, • → *) with ASCII equivalents
 - Numbered sequences (1 JOB PREP, 2 OPERATION, etc.) are NOT sections
 
 Return the JSON array now, no other text:
