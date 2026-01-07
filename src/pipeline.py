@@ -17,7 +17,11 @@ from config.schemas_docuporter import get_section_schema
 
 from src.agents import SectionDetectionAgent, SectionExtractionAgent, ReviewAgent
 from src.utils import PDFProcessor, StorageManager, setup_logger
-from src.utils.image_descriptor import create_section_image_descriptions
+from src.utils.image_descriptor import (
+    create_section_image_descriptions,  # Keep for backward compatibility
+    create_section_image_mapping,       # NEW: positional mapping
+    format_image_mapping_for_prompt     # NEW: format for prompts
+)
 
 logger = setup_logger('pipeline')
 
@@ -143,7 +147,7 @@ class PDFToJSONPipeline:
     
     
     def _extract_sections_non_parallel(self, pages_data: List[Dict], sections: List[Dict], document_id: str) -> List[Dict]:
-        """Extract sections sequentially WITH IMAGE DESCRIPTIONS."""
+        """Extract sections sequentially WITH POSITIONAL IMAGE MAPPING."""
         section_jsons = []
         
         for idx, section in enumerate(sections, 1):
@@ -169,33 +173,46 @@ class PDFToJSONPipeline:
                         if section['start_page'] <= img['page_number'] <= section['end_page']
                     ]
                     
-                    # Generate descriptions for section images
-                    image_descriptions = {}
+                    # ============================================================
+                    # NEW: Use positional mapping instead of just descriptions
+                    # ============================================================
+                    image_mapping_data = None
+                    image_prompt_text = ""
+                    
                     if section_images:
-                        logger.info(f"  [{idx}/{len(sections)}] Generating descriptions for {len(section_images)} image(s)...")
-                        image_descriptions = create_section_image_descriptions(
+                        logger.info(f"  [{idx}/{len(sections)}] Creating positional mapping for {len(section_images)} image(s)...")
+                        
+                        # Get page dimensions for accurate position calculation
+                        section_page_data = pages_data[start_idx:end_idx]
+                        
+                        # Create positional mapping with formatted prompt
+                        image_mapping_data, image_prompt_text = create_section_image_mapping(
                             section_images,
                             section_name,
                             section['section_type'],
-                            document_id
+                            document_id,
+                            section_page_data  # Pass page data for dimensions
                         )
-                        logger.info(f"  [{idx}/{len(sections)}] Generated {len(image_descriptions)} descriptions")
+                        
+                        logger.info(f"  [{idx}/{len(sections)}] Created {len(image_mapping_data)} positional mappings")
                     
                     section_schema = get_section_schema(section['section_type'])
                     extractor = SectionExtractionAgent(section_schema)
                     
-                    # Pass image descriptions to the extractor
+                    # ============================================================
+                    # Pass both mapping data and formatted prompt text
+                    # ============================================================
                     section_json = extractor.extract_section(
                         section_pages,
                         section,
                         next_section_name,
                         document_id,
-                        image_descriptions  # Pass descriptions dict
+                        image_mapping_data,      # Pass structured mapping data
+                        image_prompt_text        # Pass formatted prompt text
                     )
                     
                     section_jsons.append(section_json)
                     
-                    # Log completion
                     if '_metadata' in section_json:
                         confidence = section_json['_metadata'].get('confidence', 0)
                         logger.info(f"  [{idx}/{len(sections)}] Completed: {section_name} (confidence: {confidence:.2f})")
@@ -213,7 +230,7 @@ class PDFToJSONPipeline:
 
     # 3. Modify _extract_sections_parallel similarly:
     def _extract_sections_parallel(self, pages_data: List[Dict], sections: List[Dict], document_id: str) -> List[Dict]:
-        """Extract sections in parallel WITH IMAGE DESCRIPTIONS."""
+        """Extract sections in parallel WITH POSITIONAL IMAGE MAPPING."""
         section_jsons = []
         
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
@@ -234,15 +251,19 @@ class PDFToJSONPipeline:
                     if section['start_page'] <= img['page_number'] <= section['end_page']
                 ]
                 
-                # Generate descriptions
-                image_descriptions = {}
+                # NEW: Use positional mapping
+                image_mapping_data = None
+                image_prompt_text = ""
+                
                 if section_images:
-                    logger.info(f"Generating descriptions for {len(section_images)} images in {section['section_name']}")
-                    image_descriptions = create_section_image_descriptions(
+                    logger.info(f"Creating positional mapping for {len(section_images)} images in {section['section_name']}")
+                    
+                    image_mapping_data, image_prompt_text = create_section_image_mapping(
                         section_images,
                         section['section_name'],
                         section['section_type'],
-                        document_id
+                        document_id,
+                        section_pages
                     )
                 
                 section_schema = get_section_schema(section['section_type'])
@@ -254,7 +275,8 @@ class PDFToJSONPipeline:
                     section,
                     next_section_name,
                     document_id,
-                    image_descriptions  # Pass descriptions dict
+                    image_mapping_data,
+                    image_prompt_text
                 )
                 futures[future] = section['section_name']
             

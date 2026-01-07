@@ -1,7 +1,7 @@
 """
 Image description generator for PDF to JSON pipeline.
+ENHANCED: Uses position-based mapping for more accurate image placement.
 Uses Bedrock multimodal to generate short descriptions of images for accurate mapping.
-Save this as: src/utils/image_descriptor.py
 """
 import base64
 from typing import List, Dict, Tuple
@@ -12,6 +12,54 @@ from src.utils.logger import setup_logger
 
 logger = setup_logger('image_descriptor')
 
+
+# ============================================================================
+# POSITION HELPER FUNCTIONS
+# ============================================================================
+
+def get_position_grid(y_percent: float, x_percent: float) -> str:
+    """
+    Convert position percentages to a human-readable grid location.
+    
+    Args:
+        y_percent: Vertical position as percentage (0-100, top to bottom)
+        x_percent: Horizontal position as percentage (0-100, left to right)
+    
+    Returns:
+        Grid position string like "top-left", "middle-center", etc.
+    """
+    # Vertical position
+    if y_percent < 33:
+        v_pos = "top"
+    elif y_percent < 66:
+        v_pos = "middle"
+    else:
+        v_pos = "bottom"
+    
+    # Horizontal position
+    if x_percent < 33:
+        h_pos = "left"
+    elif x_percent < 66:
+        h_pos = "center"
+    else:
+        h_pos = "right"
+    
+    return f"{v_pos}-{h_pos}"
+
+
+def get_row_column(y_percent: float, x_percent: float) -> Tuple[int, int]:
+    """
+    Convert position to row/column indices (1-indexed).
+    Divides page into 3x3 grid.
+    """
+    row = min(3, max(1, int(y_percent / 33.33) + 1))
+    col = min(3, max(1, int(x_percent / 33.33) + 1))
+    return row, col
+
+
+# ============================================================================
+# IMAGE DESCRIPTOR CLASS
+# ============================================================================
 
 class ImageDescriptor:
     """Generate descriptions for images to enable accurate mapping in JSON."""
@@ -288,6 +336,188 @@ Return ONLY the description, which MUST be less than {description_len} words lon
             return f"{section_type} image {index}"
 
 
+# ============================================================================
+# POSITIONAL IMAGE MAPPING (NEW - MORE ROBUST APPROACH)
+# ============================================================================
+
+def create_positional_image_mapping(
+    section_images: List[Dict],
+    section_name: str,
+    section_type: str,
+    document_id: str = None,
+    page_dimensions: Dict[int, Tuple[float, float]] = None
+) -> List[Dict]:
+    """
+    Create position-based image mapping for more accurate matching.
+    
+    This approach provides:
+    1. Page number (exact)
+    2. Grid position (top-left, middle-center, etc.)
+    3. Y-position percentage (for ordering)
+    4. Brief description (for disambiguation)
+    
+    Args:
+        section_images: Images in this section
+        section_name: Section name
+        section_type: Section type
+        document_id: Document ID
+        page_dimensions: Dict mapping page_num to (width, height)
+    
+    Returns:
+        List of image info dicts with positional data
+    """
+    if not section_images:
+        return []
+    
+    logger.info(
+        f"[{document_id}] Creating positional mapping for {len(section_images)} images "
+        f"in section '{section_name}'"
+    )
+    
+    image_mappings = []
+    descriptor = ImageDescriptor()
+    
+    for idx, img in enumerate(section_images, 1):
+        try:
+            page_num = img['page_number']
+            y_pos = img.get('y_position', 0)
+            x_pos = img.get('x_position', 0)
+            y_bottom = img.get('y_bottom', y_pos)
+            
+            # Get page dimensions (default to standard page if not provided)
+            if page_dimensions and page_num in page_dimensions:
+                page_width, page_height = page_dimensions[page_num]
+            else:
+                # Default A4-ish dimensions at 150 DPI
+                page_width = 595  # ~8.5 inches
+                page_height = 842  # ~11 inches
+            
+            # Calculate position percentages
+            y_percent = (y_pos / page_height * 100) if page_height > 0 else 50
+            x_percent = (x_pos / page_width * 100) if page_width > 0 else 50
+            
+            # Get grid position
+            grid_pos = get_position_grid(y_percent, x_percent)
+            row, col = get_row_column(y_percent, x_percent)
+            
+            # Generate a brief description (shorter than before for disambiguation only)
+            brief_desc = descriptor._generate_contextual_description(
+                img, idx, section_type, section_name,
+                description_len=12,  # Shorter description
+                document_id=document_id
+            )
+            
+            image_info = {
+                'index': idx,
+                'page': page_num,
+                'grid': grid_pos,
+                'row': row,
+                'col': col,
+                'y_percent': round(y_percent, 1),
+                'x_percent': round(x_percent, 1),
+                'description': brief_desc,
+                'path': img['image_path'],
+                'width': img.get('width', 0),
+                'height': img.get('height', 0)
+            }
+            
+            image_mappings.append(image_info)
+            
+            logger.debug(
+                f"[{document_id}] Image {idx}: page {page_num}, {grid_pos}, "
+                f"Y={y_percent:.1f}% -> {img['image_path']}"
+            )
+            
+        except Exception as e:
+            logger.error(f"[{document_id}] Failed to map image {idx}: {e}")
+            # Fallback mapping
+            image_mappings.append({
+                'index': idx,
+                'page': img.get('page_number', 0),
+                'grid': 'unknown',
+                'row': 2,
+                'col': 2,
+                'y_percent': 50,
+                'x_percent': 50,
+                'description': f"Image {idx}",
+                'path': img['image_path'],
+                'width': img.get('width', 0),
+                'height': img.get('height', 0)
+            })
+    
+    # Sort by page then by Y position for consistent ordering
+    image_mappings.sort(key=lambda x: (x['page'], x['y_percent']))
+    
+    # Re-index after sorting
+    for i, mapping in enumerate(image_mappings, 1):
+        mapping['sorted_index'] = i
+    
+    logger.info(f"[{document_id}] Created {len(image_mappings)} positional mappings")
+    return image_mappings
+
+
+def format_image_mapping_for_prompt(image_mappings: List[Dict]) -> str:
+    """
+    Format image mappings into a clear, structured prompt section.
+    
+    Args:
+        image_mappings: List of positional image mappings
+    
+    Returns:
+        Formatted string for inclusion in extraction prompt
+    """
+    if not image_mappings:
+        return ""
+    
+    lines = ["\n\nIMAGES IN THIS SECTION (ordered by page and vertical position):"]
+    lines.append("=" * 80)
+    
+    current_page = None
+    for img in image_mappings:
+        if img['page'] != current_page:
+            current_page = img['page']
+            lines.append(f"\n--- PAGE {current_page} ---")
+        
+        desc_short = img['description'][:35] + "..." if len(img['description']) > 38 else img['description']
+        lines.append(
+            f"  [{img['sorted_index']:2d}] Position: {img['grid']:13s} (Y:{img['y_percent']:4.0f}%) | {desc_short}"
+        )
+        lines.append(f"       PATH: {img['path']}")
+    
+    lines.append("\n" + "=" * 80)
+    lines.append("""
+IMAGE MATCHING INSTRUCTIONS:
+============================
+To correctly place images in the JSON, follow this process:
+
+1. IDENTIFY BY PAGE: First, determine which page the image appears on
+2. IDENTIFY BY POSITION: Look at where the image sits on the page:
+   - top-left, top-center, top-right (upper third)
+   - middle-left, middle-center, middle-right (middle third)  
+   - bottom-left, bottom-center, bottom-right (lower third)
+3. USE Y% FOR ORDERING: Images with lower Y% appear higher on the page
+4. VERIFY WITH DESCRIPTION: Use the description to confirm the match
+5. COPY THE EXACT PATH: Use the PATH shown above exactly as written
+
+EXAMPLE:
+- You see a diagram in the middle-right area of page 5
+- Find in list above: Page 5, Position: middle-right
+- Verify description matches what you see
+- Copy that exact PATH to the "image" field
+
+CRITICAL RULES:
+- NEVER invent or modify paths - use ONLY paths from the list above
+- If you cannot find a matching image, leave the image field empty
+- Multiple images on same page are distinguished by Y% (vertical position)
+""")
+    
+    return "\n".join(lines)
+
+
+# ============================================================================
+# CONVENIENCE FUNCTIONS
+# ============================================================================
+
 def create_image_descriptions_for_document(
     extracted_images: List[Dict],
     document_id: str,
@@ -328,6 +558,7 @@ def create_section_image_descriptions(
 ) -> Dict[str, str]:
     """
     Convenience function for section-specific image descriptions.
+    LEGACY: Returns dict format for backward compatibility.
     
     Args:
         section_images: Images in this section
@@ -345,3 +576,49 @@ def create_section_image_descriptions(
         section_type,
         document_id
     )
+
+
+def create_section_image_mapping(
+    section_images: List[Dict],
+    section_name: str,
+    section_type: str,
+    document_id: str = None,
+    pages_data: List[Dict] = None
+) -> Tuple[List[Dict], str]:
+    """
+    NEW: Create positional image mapping with formatted prompt text.
+    This is the recommended function for accurate image placement.
+    
+    Args:
+        section_images: Images in this section
+        section_name: Section name
+        section_type: Section type
+        document_id: Document ID
+        pages_data: List of page data (to get dimensions)
+    
+    Returns:
+        Tuple of (image_mappings list, formatted_prompt_text)
+    """
+    # Extract page dimensions if available
+    page_dimensions = {}
+    if pages_data:
+        for page in pages_data:
+            page_num = page.get('page_number', 0)
+            page_dimensions[page_num] = (
+                page.get('original_width', 595),
+                page.get('original_height', 842)
+            )
+    
+    # Create positional mappings
+    mappings = create_positional_image_mapping(
+        section_images,
+        section_name,
+        section_type,
+        document_id,
+        page_dimensions
+    )
+    
+    # Format for prompt
+    prompt_text = format_image_mapping_for_prompt(mappings)
+    
+    return mappings, prompt_text

@@ -265,17 +265,19 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
         section_info: Dict,
         next_section_name: str,
         document_id: str,
-        image_descriptions: Dict[str, str] = None  # CHANGED: Now a dict of description->path
+        image_mapping_data: List[Dict] = None,  # CHANGED: Now a list of mappings
+        image_prompt_text: str = ""              # NEW: Pre-formatted prompt text
     ) -> Dict:
         """
-        Extract section with image information.
+        Extract section with POSITIONAL image information.
         
         Args:
             section_pages: List of page data dicts
             section_info: Section metadata
             next_section_name: Name of next section
             document_id: Document ID
-            section_images: List of images in this section (NEW)
+            image_mapping_data: List of positional image mappings (NEW format)
+            image_prompt_text: Pre-formatted prompt text for images (NEW)
         """
         logger.info(
             f"[{document_id}] Extracting: {section_info['section_name']} "
@@ -285,7 +287,7 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
         try:
             images_b64 = prepare_images_for_bedrock(section_pages)
             
-            # Build prompt with image information
+            # Build prompt with POSITIONAL image information
             if section_info['section_type'] == 'task_activities':
                 doc_cls_prompt = self._build_doc_classification_prompt(section_info)
                 response = invoke_bedrock_multimodal(
@@ -295,11 +297,21 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
                 )
                 doc_type = 'WIN' if "win" in response.lower() else "PMI"
                 logger.info(f"doc type: {doc_type}")
-                logger.info(f"response: {response}")
-                prompt = self._build_task_activities_prompt(section_info, image_descriptions, doc_type)
+                
+                # Pass the pre-formatted image prompt text
+                prompt = self._build_task_activities_prompt(
+                    section_info, 
+                    image_mapping_data,      # Pass mapping data
+                    image_prompt_text,       # Pass formatted prompt
+                    doc_type
+                )
             else:
-                prompt = self._build_extraction_prompt(section_info, next_section_name, image_descriptions)
-
+                prompt = self._build_extraction_prompt(
+                    section_info, 
+                    next_section_name, 
+                    image_mapping_data,      # Pass mapping data
+                    image_prompt_text        # Pass formatted prompt
+                )
             
             response = invoke_bedrock_multimodal(
                 images=images_b64,
@@ -383,52 +395,44 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
     def _build_task_activities_prompt(
         self,
         section_info: Dict,
-        image_descriptions: Dict[str, str] = None,  # CHANGED: Dict instead of List
+        image_mapping_data: List[Dict] = None,  # CHANGED
+        image_prompt_text: str = "",             # NEW
         doc_type: str = "PMI"
     ) -> str:
         """Build task activities prompt with image descriptions."""
         
-        # Format image descriptions
+        # Use the pre-formatted image prompt text
         image_info = ""
-        if image_descriptions:
-            image_info = "\\n\\nIMAGES AVAILABLE IN THIS SECTION:\\n"
-            for desc, path in image_descriptions.items():
-                image_info += f"- {desc}: {path}\\n"
+        if image_prompt_text:
+            image_info = image_prompt_text
+        elif image_mapping_data:
+            image_info = _format_image_mapping_fallback(image_mapping_data)
+        
+        # Add specific guidance for task activities
+        if image_info:
             image_info += """
-            \\nCRITICAL RULES FOR IMAGE PLACEMENT IN APPROPRIATE FIELDS:
             
-            STEP TABLE COLUMN MAPPING:
-            When you see a table with columns for steps, map images to the correct fields based on the column they appear in:
-            
-            1. STEP DESCRIPTION column/cell:
-            - Main step text and instructions go to step_description field
-            - Small inline icons/symbols within step text: add as separate entries in step_description
-            - Extract embedded text from icons (e.g., "HOLD POINT"), don't describe them
-            
-            2. PHOTO/DIAGRAM column/cell:
-            - Images in photo/diagram column → photo_diagram field
-            - These are typically equipment photos, assembly diagrams, reference images
-            - Each image as separate list entry
-            
-            3. NOTES column/cell:
-            - Text and images in notes column → notes field
-            - Including graphical notes elements
-            - Multiple notes = multiple list entries
-            
-            4. ACCEPTABLE LIMIT column/cell:
-            - Content from this column → acceptable_limit field
-            
-            5. QUESTION column/cell:
-            - Content from this column → question field
-            
-            6. CORRECTIVE ACTION column/cell:
-            - Content from this column → corrective_action field
+    TASK ACTIVITIES IMAGE PLACEMENT:
+    ================================
+    For task/activity tables with multiple columns:
 
-            7. MATCHING:
-            - CRITICAL: Make sure the image description best matches the image you see in the document (think twice)
-            
-            IMPORTANT: Place content in the field that matches its TABLE COLUMN, not based on content type!
-        """
+    1. STEP DESCRIPTION column images:
+    - Go to step_description field
+    - Include text from inside icons
+
+    2. PHOTO/DIAGRAM column images:
+    - Go to photo_diagram field
+    - Match by position on page relative to the step
+
+    3. NOTES column images:
+    - Go to notes field
+
+    4. MATCHING PROCESS:
+    a. Identify which TABLE ROW the image is in
+    b. Identify which TABLE COLUMN the image is in
+    c. Find image in list by PAGE + approximate Y-position
+    d. Copy exact path to appropriate field
+    """
                 
         prompt =  f"""Extract all information from this TASK ACTIVITIES section into JSON format using a FLAT structure.
 
@@ -845,37 +849,18 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
         self, 
         section_info: Dict, 
         next_section_name: str = None, 
-        image_descriptions: Dict[str, str] = None  # CHANGED: Dict instead of List
+        image_mapping_data: List[Dict] = None,  # CHANGED: Now list of mappings
+        image_prompt_text: str = ""              # NEW: Pre-formatted prompt text
     ) -> str:
         """Build extraction prompt with image descriptions."""
         
-        # Format image descriptions if available
+        # Use the pre-formatted image prompt text if available
         image_info = ""
-        if image_descriptions:
-            image_info = "\\n\\nIMAGES AVAILABLE IN THIS SECTION:\\n"
-            for desc, path in image_descriptions.items():
-                image_info += f"- {desc}: {path}\\n"
-            image_info += """
-    \\nCRITICAL RULES FOR IMAGE PLACEMENT:
-    1. IDENTIFY TABLE STRUCTURE:
-       - Look for table columns/cells in the document
-       - Map images to fields based on their COLUMN POSITION, not content type
-    
-    2. COLUMN-TO-FIELD MAPPING:
-       - Images in a specific column go to the corresponding field
-       - If document has columns like "Risk | Description | Controls"
-         then images in Risk column → risk field, etc.
-    
-    3. TEXT EXTRACTION:
-       - Extract TEXT FROM INSIDE icons/images (e.g., "HOLD POINT", "QA")
-       - Do NOT describe what the icon looks like
-       - If no text is embedded, use empty string ""
-    
-    4. FORMAT:
-       - {"orig_text": "caption", "orig_image": "path", "text": "caption", "image": "path"}
-       - orig_text = text (SAME value)
-       - orig_image = image (SAME value)
-    """
+        if image_prompt_text:
+            image_info = image_prompt_text
+        elif image_mapping_data:
+            # Fallback: format the mapping data ourselves
+            image_info = _format_image_mapping_fallback(image_mapping_data)
         
         return f"""Extract all information from this document section into JSON format.
 
@@ -888,23 +873,30 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
 
     CRITICAL DOCUPORTER FORMAT RULES:
     1. FIELD DUPLICATION:
-       - Every "text" field has a corresponding "orig_text" field with SAME value
-       - Every "image" field has a corresponding "orig_image" field with SAME value
-       - Every "seq" field has a corresponding "orig_seq" field with SAME value
-       - NEVER leave one empty if the other has value
-    
-    2. SCHEMA PRESERVATION:
-       - Include EVERY KEY shown in the schema
-       - NEVER add, remove, or rename keys
-       - Preserve the EXACT structure
-    
-    3. EMPTY FIELD HANDLING:
-       - If both text and image are empty → return empty array [] or empty dict {{}}
-       - [{{"orig_text": "", "text": ""}}] → []
-       - {{"orig_text": "", "text": ""}} → {{}}
-       - But if either has value, keep the structure
+    - Every "text" field has a corresponding "orig_text" field with SAME value
+    - Every "image" field has a corresponding "orig_image" field with SAME value
+    - Every "seq" field has a corresponding "orig_seq" field with SAME value
+    - NEVER leave one empty if the other has value
 
-    4. ⚠️ CRITICAL PARAGRAPH RULE:
+    2. SCHEMA PRESERVATION:
+    - Include EVERY KEY shown in the schema
+    - NEVER add, remove, or rename keys
+    - Preserve the EXACT structure
+
+    3. EMPTY FIELD HANDLING:
+    - If both text and image are empty -> return empty array [] or empty dict {{}}
+    - [{{"orig_text": "", "text": ""}}] -> []
+    - {{"orig_text": "", "text": ""}} -> {{}}
+    - But if either has value, keep the structure
+
+    4. IMAGE PLACEMENT BY POSITION:
+    - FIRST: Identify the PAGE where you see the image
+    - SECOND: Identify the POSITION on the page (top/middle/bottom, left/center/right)
+    - THIRD: Find the matching entry in the image list by page + position
+    - FOURTH: Copy the EXACT path from that entry
+    - If multiple images match, use Y% to distinguish (lower Y% = higher on page)
+
+    5. ⚠️ CRITICAL PARAGRAPH RULE:
         - If you see the text has continued to the next paragraph (or new line) then create a new text field object
         Example:
         [Paragraph 1]
@@ -949,7 +941,7 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
     - Copy text word-for-word from the section
     - Preserve original spelling, capitalization, and punctuation
     - Use ONLY ASCII characters (0-127) - replace unicode (- → --, - → -, • → *) with ASCII equivalents
-    - For images: Use the paths provided above
+    - For images: Match by PAGE and POSITION, then copy EXACT path from the list
     - Place images in the field that matches their TABLE COLUMN position
     ⚠️ CRITICAL PARAGRAPH RULE:
         - If you see the text has continued to the next paragraph (or new line) then create a new text field object
@@ -1075,3 +1067,25 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
                     fixed[key] = template_value  # Use template value
         
         return fixed
+    
+def _format_image_mapping_fallback(image_mappings: List[Dict]) -> str:
+    """Format image mappings when pre-formatted text not provided."""
+    if not image_mappings:
+        return ""
+    
+    lines = ["\n\nIMAGES IN THIS SECTION:"]
+    lines.append("-" * 60)
+    
+    for img in image_mappings:
+        sorted_idx = img.get('sorted_index', img.get('index', 0))
+        lines.append(
+            f"[{sorted_idx}] Page {img['page']}, {img['grid']} (Y:{img['y_percent']:.0f}%)"
+        )
+        lines.append(f"    Description: {img['description'][:50]}...")
+        lines.append(f"    PATH: {img['path']}")
+        lines.append("")
+    
+    lines.append("-" * 60)
+    lines.append("Match images by PAGE and POSITION, then copy exact PATH.")
+    
+    return "\n".join(lines)
