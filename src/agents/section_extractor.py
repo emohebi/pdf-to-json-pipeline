@@ -306,11 +306,8 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
                 prompt=prompt,
                 max_tokens=MODEL_MAX_TOKENS_EXTRACTION
             )
-            import unicodedata
-            response = unicodedata.normalize("NFKD", response)
             
-            from ftfy import fix_text
-            response = fix_text(response)
+            response = response.replace(" -- ", " - ")
 
             section_json = self._parse_extraction_response(response)
 
@@ -426,6 +423,9 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
             
             6. CORRECTIVE ACTION column/cell:
             - Content from this column → corrective_action field
+
+            7. MATCHING:
+            - CRITICAL: Make sure the image description best matches the image you see in the document (think twice)
             
             IMPORTANT: Place content in the field that matches its TABLE COLUMN, not based on content type!
         """
@@ -465,14 +465,14 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
             prompt += f"""
             FIRST STEP (SEQUENCE EXTRACTION or POPULATION):
                 1. FIND SEQUENCES:
-                - The squences are [BOLD] titles sometimes numerated (e.g., "1 JOB PREPARATION", "2 OPERATION") and sometimes NOT (e.g. "Pneumatic Maintenance Unit CV203"), these are sequence dividers.
+                - The squences are [BOLD] titles sometimes numerated (e.g., "1 JOB PREPARATION", "2 OPERATION", "G. HOUSEKEEPING") and sometimes NOT (e.g. "Pneumatic Maintenance Unit CV203"), these are sequence dividers.
                 - If the sequences are numerated, the steps are likely 1.1, 1.2 ... or a., b., ...
                 - If the sequences are not numerated, then the steps are likely 1., 2., ... or a., b., ... 
                 - Sequences are usually in a table with columns "No.", "Task Steps", "Photo or Diagram" and "Notes".
+                - If you see "HANDOVER TASKS", "HOUSEKEEPING TASKS" or "HOUSE KEEPING" black banner, these are sequence and the items under them are steps.
                 
-                2. LOOK FOR SUB-HEADINGS with black background not in a table (If available):
+                2. CRITICAL: LOOK FOR SUB-HEADINGS with black background but not in a table (If available):
                 - The sub-headings are about running or execution conditions e.g., "Tasks to be done under Isolation", "Pre-Isolation Tasks", "Post-Isolation Tasks", "De-Isolation Tasks".
-                - These are sequences with empty sequence_no and they determine execution_condition in the next available sequences.
                 - When you encounter sub-headings, infer the execution_condition for all sequences under them until you reach the next sub-heading.
                 - "Tasks to be done under Isolation" → execution_condition: {{"orig_text": "Isolation", "text": "Isolation"}}
                 - "Pre-Isolation Tasks" → execution_condition: {{"orig_text": "Pre-Isolation", "text": "Pre-Isolation"}}
@@ -487,8 +487,34 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
                     - If they are not available then the steps are EMPTY (Example 3 below)
                     CRITICAL: SUB-ITEMS DO NOT START with 1., 2., 3., if you see these numbering they are NEXT Sequence
 
+                SCENARIO 1 (CRITICAL):
+                IF there is a Sequence with number like 1., 2., 3., right BEFORE the sub-heading. In this case the sub-heading is NOT a sequence and it only defines the running conditions for the next sequences.
+                If there is any SUB-ITEMS right after this sub-heading, concat them to the previous numbered sequence.
+
+                Example: (SUB HEADING is not a sequence):
+                    [BOLD] 1. First TITLE [FIRST BOUNDARY]
+                    [BLACK BACKGROUND] "Task to be done under Isolation" --> [INFER execution_condition] [NOT A SEQUENCE]
+                    a. step --> [SUB-ITEM] [concat it to the squence 1 steps]
+                    b. step --> [SUB-ITEM] [concat it to the squence 1 steps]
+                    1.1 Step one
+                    1.2 Step two
+                    [BOLD] 2. Second TITLE --> [SECOND BOUNDARY]
+                    2.1 Step one
+                    2.2 Step two
+                    [BOLD] 3. Third TITLE --> [THIRD BOUNDARY]
+                    3.1 Step one
+                    3.2 Step two
+
+                    Result:
+                    - First sequence: sequence_name: "First Title" and sequence_no: "1", steps a., b., 1.1, 1.2, execution_condition: "Isolation"
+                    - Second sequence: sequence_name: "Second TITLE" and sequence_no: "2", steps 2.1, 2.2, execution_condition: "Isolation"
+                    - Third sequence: sequence_name: "Third TITLE" and sequence_no: "3", steps 3.1, 3.2, execution_condition: "Isolation"
+                
+                SCENARIO 2:
+                Other than scenario 1, the sub-headings are sequences with empty sequence_no and they determine execution_condition in the next available sequences.
+
                 Example 1 (Numerated Sequences):
-                    "Task to be done under Isolation" --> [FIRST BOUNDARY, INFER execution_condition]
+                    [BLACK BACKGROUND] "Task to be done under Isolation" --> [FIRST BOUNDARY, INFER execution_condition]
                     a. step --> [SUB-ITEM]
                     b. step --> [SUB-ITEM]
                     [BOLD] 1. Second TITLE --> [SECOND BOUNDARY]
@@ -504,7 +530,7 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
                     - Third sequence: sequence_name: "Third TITLE" and sequence_no: "2", steps 2.1, 2.2, execution_condition: "Isolation"
 
                 Example 2 (NOT Numerated Sequences):
-                    "Pre-Isolation Tasks (or similar sentence)" --> [FIRST BOUNDARY, INFER execution_condition]
+                    [BLACK BACKGROUND] "Pre-Isolation Tasks (or similar sentence)" --> [FIRST BOUNDARY, INFER execution_condition]
                     a. step --> [SUB-ITEM]
                     b. step --> [SUB-ITEM]
                     [BOLD] Second TITLE --> [SECOND BOUNDARY]
@@ -520,7 +546,7 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
                     - Third sequence: sequence_name: "Third TITLE" and sequence_no: "", steps 2.1, 2.2, execution_condition: "Pre-Isolation"
 
                 Example 3 (SUB ITEMS sre not available):
-                    "Task to be done under Isolation" --> [FIRST BOUNDARY, INFER execution_condition]
+                    [BLACK BACKGROUND] "Task to be done under Isolation" --> [FIRST BOUNDARY, INFER execution_condition]
                     [BOLD] 1. Second TITLE --> [SECOND BOUNDARY]
                     1.1 Step one
                     1.2 Step two
@@ -715,6 +741,7 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
         ⚠️ CRITICAL SEQUENCE ASSIGNMET:
         - In flat structure: If sequence has 2 steps, create 2 objects for that sequence with duplicated fields
         - If sequence has 0 steps, create 1 object with empty step fields
+        - CRITIAL: DO NOT miss the sequence nummber if available next to the sequence name.
 
         ⚠️ CRITICAL STEP ASSIGNMENT: 
         - Steps belong ONLY to the sequence where they physically appear in the document
@@ -763,14 +790,15 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
         -----------------
         EXTRACTION STEPS:
         -----------------
-        1. Look at ALL pages ({section_info['start_page']} to {section_info['end_page']}) and decide on the document type
+        1. Look at ALL pages ({section_info['start_page']} to {section_info['end_page']}):
         """
         if doc_type == "WIN":
             prompt += f"""
             1.1. For this document:
             - Follow standard numbering (1, 1.1, 1.2,.. or 1., 2, 3...)
-            - Check for special patterns (sub-headings, sub-items)
-            - Sub-headings are separate Sequence with sub items as steps (if available)
+            - Check for special patterns (sub-headings, sub-items and sequences)
+            - Sub-headings are separate Sequence with sub items as steps (if available) (Scenario 2) UNLESS there is a Numbered SEQUENCE right before the sub-heading (Scenario 1).
+                - Carefully consider both Scenario 1 and 2 defined above. 
             - Set execution_condition based on sub-heading context for all next sequences until next sub-heading 
             """
         else:
@@ -936,6 +964,10 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
         ]
     
 
+    CRITICAL:
+    - MAKE SURE to extract all information about the SAFETY from "SAFETY" section (including numerated items)
+    - MAKE SURE all images in the section "ATTACHED PICTURES, DRAWINGS OR DIAGRAMS" are populated in the JSON
+        
     EXTRACTION STEPS:
     1. Look at ALL pages shown ({section_info['start_page']} to {section_info['end_page']})
     2. Identify the table structure and column headers (if any)

@@ -69,7 +69,7 @@ class DocumentHeaderExtractor:
         return """Extract document header information from this first page of the document.
 
 Look for the following information typically found at the top of technical/safety documents:
-1. document source 
+1. document source - It is usually located in the top-left side of the document header (this is not in logo of the company)
 2. document type - Type of document (e.g., "Work Method Statement", "Safety Procedure", etc.)
 3. document number - The unique document identifier/reference number
 4. document version number - Version or revision number
@@ -172,10 +172,10 @@ Return ONLY the JSON object (no markdown, start with {):
     def _get_empty_header(self) -> Dict[str, Any]:
         """Get empty header structure."""
         return {
-            "Document_Source": {"orig_text": "", "text": ""},
-            "Document_Type": {"orig_text": "", "text": ""},
-            "Document_Number": {"orig_text": "", "text": ""},
-            "Document_Version_Number": {"orig_text": "", "text": ""},
-            "Work_Description": {"orig_text": "", "text": ""},
-            "Purpose": {"orig_text": "", "text": ""}
+            "document_source": {"orig_text": "", "text": ""},
+            "document_type": {"orig_text": "", "text": ""},
+            "document_number": {"orig_text": "", "text": ""},
+            "document_version_number": {"orig_text": "", "text": ""},
+            "work_description": {"orig_text": "", "text": ""},
+            "purpose": {"orig_text": "", "text": ""}
         }

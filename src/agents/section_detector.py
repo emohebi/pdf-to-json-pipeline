@@ -301,79 +301,79 @@ class SectionDetectionAgent:
         
         return merged
     
-    def _build_detection_prompt(
-        self,
-        all_pages: List[Dict],
-        sample_pages: List[Dict]
-    ) -> str:
-        """Build prompt for single batch detection."""
-        return f"""Analyze ALL pages of this document and identify logical DOCUMENT SECTIONS.
+#     def _build_detection_prompt(
+#         self,
+#         all_pages: List[Dict],
+#         sample_pages: List[Dict]
+#     ) -> str:
+#         """Build prompt for single batch detection."""
+#         return f"""Analyze ALL pages of this document and identify logical DOCUMENT SECTIONS.
 
-Total pages shown: {len(sample_pages)}
+# Total pages shown: {len(sample_pages)}
 
-IMPORTANT - UNDERSTAND THE DIFFERENCE:
-1. DOCUMENT SECTIONS (what you should identify):
-   - These are major document divisions with descriptive headings
-   - Examples: "SAFETY", "Material Risks and Controls", "Additional PPE Required", "Reference Documentation"
-   - These headings are usually styled differently (bold, larger font, different color, underlined)
-   - They divide the document into major logical parts
+# IMPORTANT - UNDERSTAND THE DIFFERENCE:
+# 1. DOCUMENT SECTIONS (what you should identify):
+#    - These are major document divisions with descriptive headings
+#    - Examples: "SAFETY", "Material Risks and Controls", "Additional PPE Required", "Reference Documentation"
+#    - These headings are usually styled differently (bold, larger font, different color, underlined)
+#    - They divide the document into major logical parts
 
-2. NUMBERED SEQUENCES (what you should IGNORE):
-   - These are numbered steps or tasks WITHIN a section
-   - Examples: "1 JOB PREPARATION", "2 INSPECTION PROCEDURE", "3 POST-WORK CHECKS"
-   - These appear INSIDE the "Task Activities" section
-   - DO NOT treat these as separate sections
+# 2. NUMBERED SEQUENCES (what you should IGNORE):
+#    - These are numbered steps or tasks WITHIN a section
+#    - Examples: "1 JOB PREPARATION", "2 INSPECTION PROCEDURE", "3 POST-WORK CHECKS"
+#    - These appear INSIDE the "Task Activities" section
+#    - DO NOT treat these as separate sections
 
-CRITICAL RULES:
-1. section_name MUST be the EXACT text of the DOCUMENT SECTION heading
-- Exception: If you see either "Pre-Task Activities" or "Post-Task Activities" sections then consider them in the "Task Activities" section
-- Example of document having "Pre-Task Activities" or "Post-Task Activities" sections:
-    [Pre-Task Activities] --> "Task Activities" boundary starts here
+# CRITICAL RULES:
+# 1. section_name MUST be the EXACT text of the DOCUMENT SECTION heading
+# - Exception: If you see either "Pre-Task Activities" or "Post-Task Activities" sections then consider them in the "Task Activities" section
+# - Example of document having "Pre-Task Activities" or "Post-Task Activities" sections:
+#     [Pre-Task Activities] --> "Task Activities" boundary starts here
 
-    [Task Activities]
+#     [Task Activities]
 
-    [Post-Task Activities]
+#     [Post-Task Activities]
 
-    [Next Section] --> "Task Activities" boundary ends here
-- Do NOT Add "Pre-Task Activities" or "Post-Task Activities" sections to "unhandled_content"
+#     [Next Section] --> "Task Activities" boundary ends here
+# - Do NOT Add "Pre-Task Activities" or "Post-Task Activities" sections to "unhandled_content"
 
-2. DO NOT treat numbered sequences (like "1 JOB PREPARATION") as sections
-3. Numbered sequences belong INSIDE the "Task Activities" section
-4. Look for major document divisions, not task steps
-5. Examples of CORRECT section identification:
-   - "SAFETY" (a document section)
-   - "Material Risks and Controls" (a document section)
-   - "Task Activities" (a document section that contains numbered sequences)
-   - "Additional PPE Required" (a document section)
-6. Examples of INCORRECT section identification:
-   - "1 JOB PREPARATION" ❌ (this is a sequence, not a section)
-   - "2 OPERATION" ❌ (this is a sequence, not a section)
-   - "Step 1" ❌ (this is a step, not a section)
-7. If no heading is visible, use "Untitled Section [page X]"
+# 2. DO NOT treat numbered sequences (like "1 JOB PREPARATION") as sections
+# 3. Numbered sequences belong INSIDE the "Task Activities" section
+# 4. Look for major document divisions, not task steps
+# 5. Examples of CORRECT section identification:
+#    - "SAFETY" (a document section)
+#    - "Material Risks and Controls" (a document section)
+#    - "Task Activities" (a document section that contains numbered sequences)
+#    - "Additional PPE Required" (a document section)
+# 6. Examples of INCORRECT section identification:
+#    - "1 JOB PREPARATION" ❌ (this is a sequence, not a section)
+#    - "2 OPERATION" ❌ (this is a sequence, not a section)
+#    - "Step 1" ❌ (this is a step, not a section)
+# 7. If no heading is visible, use "Untitled Section [page X]"
 
-"""+"""
-Return ONLY a JSON array with this exact structure:
-[
-    {
-        "section_type": "one of: """+f"""{', '.join(self.section_definitions.keys())}"""+""",
-        "section_name": "EXACT heading/title text from document (not descriptive)",
-        "start_page": number (1-indexed),
-        "end_page": number (1-indexed),
-        "description": "brief description of content",
-        "confidence": number (0.0-1.0)
-    }
-]
-""" + f"""
+# """+"""
+# Return ONLY a JSON array with this exact structure:
+# [
+#     {
+#         "section_type": "one of: """+f"""{', '.join(self.section_definitions.keys())}"""+""",
+#         "section_name": "EXACT heading/title text from document (not descriptive)",
+#         "start_page": number (1-indexed),
+#         "end_page": number (1-indexed),
+#         "description": "brief description of content",
+#         "confidence": number (0.0-1.0)
+#     }
+# ]
+# """ + f"""
 
-Requirements:
-- Sections must not overlap
-- All pages must be covered
-- Use proper section types from the list
-- Be precise with page numbers
-- Focus on DOCUMENT-LEVEL divisions, not task-level sequences
+# Requirements:
+# - Sections must not overlap
+# - All pages must be covered
+# - Use proper section types from the list
+# - Be precise with page numbers
+# - Focus on DOCUMENT-LEVEL divisions, not task-level sequences
 
-Return the JSON array now, no other text:
-"""
+# Return the JSON array now, no other text:
+# """
     
     def _build_batch_detection_prompt(
         self,
@@ -401,32 +401,12 @@ IMPORTANT - UNDERSTAND THE DIFFERENCE:
 
 2. NUMBERED SEQUENCES (what you should IGNORE):
    - These are numbered steps or tasks WITHIN a section
-   - Examples: "1 JOB PREPARATION", "2 INSPECTION", "3 POST-WORK"
+   - Examples: "1 JOB PREPARATION", "2 INSPECTION", "3 POST-WORK", "G. HOUSEKEEPING"
    - These appear INSIDE the "Task Activities" section
    - DO NOT treat these as separate sections
 
 YOUR TASK:
 Identify DOCUMENT SECTIONS that START and/or END within pages {start_page}-{end_page}.
-Extract the EXACT section headings/titles as they appear in the document.
-IGNORE numbered sequences - they are not sections.
-
-CRITICAL: section_name must be the EXACT text from the DOCUMENT SECTION heading, NOT a numbered sequence.
-Examples:
-- Document shows section heading "Material Risks and Controls" → section_name: "Material Risks and Controls" ✓
-- Document shows section heading "Task Activities" → section_name: "Task Activities" ✓
-- Document shows numbered item "1 JOB PREPARATION" → IGNORE IT, it's not a section ✗
-- Document shows numbered item "2 OPERATION" → IGNORE IT, it's not a section ✗
-- Exception: If you see either "Pre-Task Activities" or "Post-Task Activities" sections then consider them in the "Task Activities" section
-- Example of document having "Pre-Task Activities" or "Post-Task Activities" sections:
-    [BOLD] Pre-Task Activities --> ["Task Activities" boundary starts here]
-
-    [BOLD] Task Activities
-
-    [BOLD] Post-Task Activities
-
-    [BOLD] Next Section --> ["Task Activities" boundary ends here]
-  NOTE: Do not report the "Pre-Task Activities" and "Post-Task Activities" separately, include them in the task activities.
-- Do NOT Add "Pre-Task Activities" or "Post-Task Activities" sections to "unhandled_content"
 
 """+"""
 Return ONLY a JSON array with this exact structure:
@@ -440,6 +420,31 @@ Return ONLY a JSON array with this exact structure:
     }
 ]
 """+f"""
+--------------
+CRITICAL:
+--------------
+1- Section type MUST be one of the following:
+{self.section_definitions}
+
+2- Extract the EXACT section headings/titles as they appear in the document.
+3- IGNORE numbered sequences - they are not sections.
+
+Examples:
+- Document shows section heading or page content is similar to "Material Risks and Controls" → section_name: "Material Risks and Controls" ✓
+- Document shows section heading or page content is similar to "Task Activities" → section_name: "Task Activities" ✓
+- Document shows numbered item "1 JOB PREPARATION" → IGNORE IT, it's not a section ✗
+- Document shows numbered item "2 OPERATION" → IGNORE IT, it's not a section ✗
+- Exception: If you see either "Pre-Task Activities", "Post-Task Activities", "HANDOVER TASKS", "HOUSEKEEPING TASKS" or "HOUSE KEEPING" sections or similar, then they MUST be concat to the "Task Activities" section with section_type: "task_activities".
+- Example of document having "Pre-Task Activities", "Post-Task Activities", "HANDOVER TASKS", "HOUSEKEEPING TASKS" or "HOUSE KEEPING" sections or similar:
+    [BOLD] Pre-Task Activities --> ["Task Activities" boundary starts here]
+
+    [BOLD] Task Activities
+
+    [BOLD] Post-Task Activities
+
+    [BOLD] Next Section --> ["Task Activities" boundary ends here]
+  NOTE: Do not report the "Pre-Task Activities", "Post-Task Activities", "HANDOVER TASKS", "HOUSEKEEPING TASKS" or "HOUSE KEEPING" separately, include them in the task activities with section_type: "task_activities".
+- Do NOT Add "Pre-Task Activities", "Post-Task Activities", "HANDOVER TASKS", "HOUSEKEEPING TASKS" or "HOUSE KEEPING" sections to "unhandled_content"
 
 RULES:
 - Page numbers must be between {start_page} and {end_page}

@@ -83,7 +83,8 @@ class ImageDescriptor:
         section_images: List[Dict],
         section_name: str,
         section_type: str,
-        document_id: str = None
+        document_id: str = None,
+        save_to_file: bool = True
     ) -> Dict[str, str]:
         """
         Generate descriptions for images in a specific section with context.
@@ -115,7 +116,7 @@ class ImageDescriptor:
                     idx,
                     section_type,
                     section_name,
-                    description_len = 30 if len_images <=30 else 10,
+                    description_len = 20 if len_images <=30 else 30,
                     document_id = document_id
                 )
                 
@@ -131,7 +132,12 @@ class ImageDescriptor:
                 )
                 fallback_desc = f"{section_type} image {idx} on page {img['page_number']}"
                 descriptions_dict[fallback_desc] = img['image_path']
-        
+        if save_to_file:
+            from config.settings import IMG_DESC_DIR
+            output_file = IMG_DESC_DIR / f"{section_name.replace(' ', '_')}_img_desc.json"
+            with open(output_file, 'w') as f:
+                json.dump(descriptions_dict, f, indent=2)
+            logger.info(f"Saved image descriptions to {output_file}")
         return descriptions_dict
     
     def _generate_single_description(
@@ -265,7 +271,7 @@ Describe what it shows or depicts."""
 
 {context}
 
-Provide a detailed, SPECIFIC description (Maximum {description_len} words) which clearly describes the image for a computer vision model. 
+Provide a detailed, SPECIFIC description (Maximum {description_len} words) which clearly describes the image for a computer vision model matching. 
 If you see any text or object's colors in the image please explain them for better matching accuracy.
 Return ONLY the description, which MUST be less than {description_len} words long:"""
             

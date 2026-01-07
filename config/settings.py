@@ -25,8 +25,9 @@ for directory in [OUTPUT_DIR, INTERMEDIATE_DIR, FINAL_DIR, LOGS_DIR]:
 DETECTION_DIR = INTERMEDIATE_DIR / 'detection'
 SECTIONS_DIR = INTERMEDIATE_DIR / 'sections'
 VALIDATION_QUEUE_DIR = INTERMEDIATE_DIR / 'validation_queue'
+IMG_DESC_DIR = INTERMEDIATE_DIR / 'image_description'
 
-for directory in [DETECTION_DIR, SECTIONS_DIR, VALIDATION_QUEUE_DIR]:
+for directory in [DETECTION_DIR, SECTIONS_DIR, VALIDATION_QUEUE_DIR, IMG_DESC_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
 # AWS Configuration
@@ -60,7 +61,7 @@ DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 VERBOSE = os.getenv('VERBOSE', 'True').lower() == 'true'
 
 # Model parameters
-MODEL_TEMPERATURE = 0.1  # Deterministic for extraction
+MODEL_TEMPERATURE = 0  # Deterministic for extraction
 MODEL_MAX_TOKENS_DETECTION = 4096
 MODEL_MAX_TOKENS_EXTRACTION = 56000
 MODEL_MAX_TOKENS_VALIDATION = 8192
