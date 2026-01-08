@@ -432,6 +432,7 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
     b. Identify which TABLE COLUMN the image is in
     c. Find image in list by PAGE + approximate Y-position
     d. Copy exact path to appropriate field
+    e. For multiple images in same ROW and COLUMN populate them as a list
     """
                 
         prompt =  f"""Extract all information from this TASK ACTIVITIES section into JSON format using a FLAT structure.
@@ -784,7 +785,7 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
 
         3. IMAGE PLACEMENT BY COLUMN:
         - Map images to fields based on table column
-        - Don't put all images in one field
+        - If you see multiple images in one field then populated them in the list, do not miss any image.
 
         4. TEXT EXTRACTION:
         - Extract TEXT from icons, don't describe them
@@ -838,6 +839,7 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
         - Map content from each column to appropriate field
         - Duplicate all values to orig_ fields
         - Carefully check images and make sure images are populated in the correct fields in the JSON
+        - Populate all the images in the fields as list
         
         3. Clean up empty fields (remove if both text and image are empty)
 

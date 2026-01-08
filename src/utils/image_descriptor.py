@@ -164,7 +164,7 @@ class ImageDescriptor:
                     idx,
                     section_type,
                     section_name,
-                    description_len = 20 if len_images <=30 else 30,
+                    description_len = 50 if len_images <=70 else 70,
                     document_id = document_id
                 )
                 

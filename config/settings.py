@@ -41,7 +41,7 @@ BEDROCK_NAMESPACE: str = "swscraping"
 MODEL_ID_37: str = "apac.anthropic.claude-3-7-sonnet-20250219-v1:0"
 MODEL_ID_40: str = "apac.anthropic.claude-sonnet-4-20250514-v1:0"# "au.anthropic.claude-sonnet-4-5-20250929-v1:0"
 MODEL_ID_45: str = "au.anthropic.claude-sonnet-4-5-20250929-v1:0"
-MODEL = MODEL_ID_40
+MODEL = MODEL_ID_45
 
 # Processing Configuration
 MAX_WORKERS = int(os.getenv('MAX_WORKERS', '5'))
