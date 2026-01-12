@@ -164,7 +164,7 @@ class ImageDescriptor:
                     idx,
                     section_type,
                     section_name,
-                    description_len = 50 if len_images <=70 else 70,
+                    description_len = 100 if len_images <=120 else 120,
                     document_id = document_id
                 )
                 
@@ -478,9 +478,9 @@ def format_image_mapping_for_prompt(image_mappings: List[Dict]) -> str:
             current_page = img['page']
             lines.append(f"\n--- PAGE {current_page} ---")
         
-        desc_short = img['description'][:35] + "..." if len(img['description']) > 38 else img['description']
+        desc_short = img['description']
         lines.append(
-            f"  [{img['sorted_index']:2d}] Position: {img['grid']:13s} (Y:{img['y_percent']:4.0f}%) | {desc_short}"
+            f"  [{img['sorted_index']:2d}] Position: {img['grid']:13s} (X:{img['x_percent']:4.0f}%, Y:{img['y_percent']:4.0f}%)| {desc_short}"
         )
         lines.append(f"       PATH: {img['path']}")
     
@@ -495,7 +495,7 @@ To correctly place images in the JSON, follow this process:
    - top-left, top-center, top-right (upper third)
    - middle-left, middle-center, middle-right (middle third)  
    - bottom-left, bottom-center, bottom-right (lower third)
-3. USE Y% FOR ORDERING: Images with lower Y% appear higher on the page
+3. USE X% and Y% FOR ORDERING: Images with lower Y% appear higher on the page
 4. VERIFY WITH DESCRIPTION: Use the description to confirm the match
 5. COPY THE EXACT PATH: Use the PATH shown above exactly as written
 
@@ -508,7 +508,7 @@ EXAMPLE:
 CRITICAL RULES:
 - NEVER invent or modify paths - use ONLY paths from the list above
 - If you cannot find a matching image, leave the image field empty
-- Multiple images on same page are distinguished by Y% (vertical position)
+- Multiple images on same page are distinguished by X% (horizontal position) and Y% (vertical position)
 """)
     
     return "\n".join(lines)

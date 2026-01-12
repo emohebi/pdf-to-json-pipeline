@@ -932,13 +932,12 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
         You might see several section name: "{section_info['section_name']}" 
         - When extracting section, if the section continues onto the next page, it is treated as part of the same section. 
             Example: 
-            "{section_info['section_name']}"  ---> Section 1
-
+            [BOLD TITLE] "{section_info['section_name']}"  ---> Section 1
+            [TEXT 1]
             [Page Break]
-
-            "{section_info['section_name']}"  (if found) ---> [concat it to the Section 1]
-
-            "{next_section_name}" ---> Next Section
+            [BOLD TITLE] "{section_info['section_name']}"  (if found) 
+            [TEXT 2] ---> [concat it to the TEXT 1]
+            [BOLD TITLE] "{next_section_name}" ---> Next Section
     - Do not paraphrase or reword
     - Copy text word-for-word from the section
     - Preserve original spelling, capitalization, and punctuation

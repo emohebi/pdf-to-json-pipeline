@@ -7,9 +7,9 @@ from typing import List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import time
-import re
+import re, json
 
-from config.settings import MAX_WORKERS, MODEL
+from config.settings import MAX_WORKERS, MODEL, IMG_DESC_DIR
 from src.agents.document_header_extractor import DocumentHeaderExtractor
 from src.agents.validator_docuporter import ValidationAgentDocuPorter
 from src.utils.docuporter_processor import process_docuporter_format
@@ -195,6 +195,12 @@ class PDFToJSONPipeline:
                         )
                         
                         logger.info(f"  [{idx}/{len(sections)}] Created {len(image_mapping_data)} positional mappings")
+                        output_file = IMG_DESC_DIR / f"{section_name}_img_desc.json"
+        
+                        with open(output_file, 'w') as f:
+                            json.dump(image_mapping_data, f, indent=2)
+                        
+                        logger.info(f"Saved images positional mappings: {output_file}")
                     
                     section_schema = get_section_schema(section['section_type'])
                     extractor = SectionExtractionAgent(section_schema)

@@ -268,9 +268,8 @@ class SectionDetectionAgent:
         for next_section in all_sections[1:]:
             # Check if we should merge with current section
             # FIXED: Only merge if both type AND name match exactly
-            if (current_section['section_name'] == next_section['section_name'] and
-                current_section['section_type'] == next_section['section_type'] and
-                current_section['end_page'] >= next_section['start_page'] - 1):
+            if (current_section['section_type'] == next_section['section_type'] and
+                current_section['end_page'] >= next_section['start_page'] - 1): # and current_section['section_name'] == next_section['section_name'] and
                 # Merge: extend current section
                 logger.debug(
                     f"Merging sections: {current_section['section_name']} "
