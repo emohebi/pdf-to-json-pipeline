@@ -51,7 +51,7 @@ SECTION_DEFINITIONS = {
     'reference_documentation': 'Reference documentation with document numbers and descriptions',
     'reference_drawings': 'Reference drawings including mechanical and structural/civil drawings',
     'attached images': 'Attached images and diagrams',
-    'unhandled_content': 'Content that does not fit into defined sections'
+    'unhandled_content': 'Content that does not fit into defined sections or the content related to: feedback, work sign on/off, work completion, etc'
 }
 
 

@@ -155,7 +155,7 @@ Return only the text in reading order (top to bottom, left to right)."""
         
         if output_dir is None:
             from config.settings import OUTPUT_DIR
-            output_dir = OUTPUT_DIR / 'Media' / pdf_path.stem
+            output_dir = OUTPUT_DIR / 'Media'
         
         output_dir.mkdir(parents=True, exist_ok=True)
         
@@ -220,7 +220,7 @@ Return only the text in reading order (top to bottom, left to right)."""
             with open(img_path, 'wb') as f:
                 f.write(img_data['base_image']['image'])
             
-            relative_path = f"Media/{pdf_path.stem}/{img_filename}"
+            relative_path = f"Media/{img_filename}"
             
             images.append({
                 'page_number': img_data['page_number'],

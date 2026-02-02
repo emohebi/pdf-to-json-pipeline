@@ -42,7 +42,7 @@ class SectionDetectionAgent:
                 Your task is to:
                 1. Analyze document pages
                 2. Identify where each section begins and ends
-                3. Classify each section by type from the list above
+                3. Classify each section by type from the list above, make sure to indentify "unhandled_content"
                 4. Extract the EXACT section name/title as it appears in the document
                 5. Return a structured JSON array of sections
 
@@ -72,7 +72,7 @@ class SectionDetectionAgent:
                 - Be precise with page boundaries
                 - Pay attention to headings, visual separators, content changes
                 - Look for section numbers, titles, and headers in the document
-                - If unsure about section type, use 'general'
+                - If unsure about section type, use 'unhandled_content'
                 - Sections should not overlap
                 - All pages must be covered by sections
 
@@ -268,7 +268,24 @@ class SectionDetectionAgent:
         for next_section in all_sections[1:]:
             # Check if we should merge with current section
             # FIXED: Only merge if both type AND name match exactly
-            if (current_section['section_type'] == next_section['section_type'] and
+            if (current_section['section_type'] == 'task_activities' and current_section['section_type'] == next_section['section_type'] and
+                current_section['end_page'] >= next_section['start_page'] - 1): # and current_section['section_name'] == next_section['section_name'] and
+                # Merge: extend current section
+                logger.debug(
+                    f"Merging sections: {current_section['section_name']} "
+                    f"({current_section['start_page']}-{current_section['end_page']}) + "
+                    f"({next_section['start_page']}-{next_section['end_page']})"
+                )
+                current_section['end_page'] = max(
+                    current_section['end_page'],
+                    next_section['end_page']
+                )
+                # Average confidence
+                current_section['confidence'] = (
+                    current_section.get('confidence', 0.8) +
+                    next_section.get('confidence', 0.8)
+                ) / 2
+            elif (current_section['section_type'] == next_section['section_type'] and current_section['section_name'] == next_section['section_name'] and
                 current_section['end_page'] >= next_section['start_page'] - 1): # and current_section['section_name'] == next_section['section_name'] and
                 # Merge: extend current section
                 logger.debug(
@@ -353,8 +370,11 @@ CRITICAL:
 
 2- Extract the EXACT section headings/titles as they appear in the document.
 3- IGNORE numbered sequences - they are not sections.
+4- Make sure to detect all "unhandled_content", like multiple Sign-off sections with different heading
+5- Section's heading background color is black (usually table header)
 
 Examples:
+- Document shows section heading or page content is similar to "FEEDBACK (To support content improvement)" or "SIGN OFF" -> "unhandled_content"
 - Document shows section heading or page content is similar to "Material Risks and Controls" → section_name: "Material Risks and Controls" ✓
 - Document shows section heading or page content is similar to "Task Activities" → section_name: "Task Activities" ✓
 - Document shows numbered item "1 JOB PREPARATION" → IGNORE IT, it's not a section ✗

@@ -69,7 +69,13 @@ class DocumentHeaderExtractor:
         return """Extract document header information from this first page of the document.
 
 Look for the following information typically found at the top of technical/safety documents:
-1. document source - It is usually located in the top-left side of the document header (this is not in logo of the company)
+1. document source - It is usually located in the top-left side of the document header (this is not in logo of the company nor the document type)
+Example:
+
+[Document Source]                                           [BHP logo]
+----------------------------------------------------------------------
+[Document Type]
+
 2. document type - Type of document (e.g., "Work Method Statement", "Safety Procedure", etc.)
 3. document number - The unique document identifier/reference number
 4. document version number - Version or revision number

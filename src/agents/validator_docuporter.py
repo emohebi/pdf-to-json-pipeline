@@ -176,7 +176,7 @@ class ValidationAgentDocuPorter:
         from config.schemas_docuporter import SECTION_SCHEMAS
         
         schema = SECTION_SCHEMAS.get(section_type)
-        if schema:
+        if schema and section_type not in ["material_risks_and_controls"]:
             # Return clean empty version
             return clean_empty_fields(schema)
         

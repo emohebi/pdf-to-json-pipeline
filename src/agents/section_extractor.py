@@ -223,7 +223,16 @@ RULES FOR EMPTY OR MISSING DATA:
 - Empty array of objects: []
 - Empty dictionary: {{}}
 - But the field MUST STILL BE PRESENT
+    Exception for "material_risks_and_controls" section:
+    If all children fields are empty then remove children fields and keep only the parent field as empty []
+    Example:
+        "material_risks_and_controls": [{{"risk": {{}},"risk_description": {{}},"critical_controls": []}}]
+
+    Result:
+        "material_risks_and_controls": []
+
 - DO NOT use null, "N/A", "Unknown", or any placeholder text
+- If a section/table continues to the next page make sure to extract the whole content
 - If a section doesn't exist, return the minimum valid structure
 
 Schema to follow:
@@ -232,7 +241,7 @@ Schema to follow:
 OUTPUT FORMAT:
 - Return ONLY valid JSON matching the schema exactly
 - Include EVERY field from the schema
-- Use empty values, never omit fields
+- Use empty values, never omit fields (Exception for "material_risks_and_controls" section as explained above)
 - No markdown code blocks (no ```json```)
 - No additional text, explanations, or comments
 - Start directly with {{ or [
@@ -737,6 +746,17 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
             {{"orig_text": "Paragraph 2", "text": "Paragraph 2"}}
         ]
 
+        ⚠️ CRITICAL NEW LINE RULE:
+        - If you see the text has continued to the next line then create a new text field object
+        Example:
+        [TEXT 1]
+        [TEXT 2]
+        Result:
+        [
+            {{"orig_text": "TEXT 1", "text": "TEXT 1"}},
+            {{"orig_text": "TEXT 2", "text": "TEXT 2"}}
+        ]
+
         ⚠️ CRITICAL FIELD DUPLICATION RULE:
         ALL fields with "orig_" prefix must have the SAME value as their corresponding field:
         - orig_text = text (exact same value)
@@ -889,7 +909,14 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
     - If both text and image are empty -> return empty array [] or empty dict {{}}
     - [{{"orig_text": "", "text": ""}}] -> []
     - {{"orig_text": "", "text": ""}} -> {{}}
-    - But if either has value, keep the structure
+    - But if either has value, keep the full structure
+        Exception for "material_risks_and_controls" section:
+        If all children fields are empty then remove children fields and keep only the parent field as empty []
+        Example:
+            "material_risks_and_controls": [{{"risk": {{}},"risk_description": {{}},"critical_controls": []}}]
+
+        Result:
+            "material_risks_and_controls": []
 
     4. IMAGE PLACEMENT BY POSITION:
     - FIRST: Identify the PAGE where you see the image
@@ -917,6 +944,7 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
         Exceptions:
         - "step_no": {{}} → "step_no": {{"orig_text": "", "text": ""}}
         - "equipment_asset": {{}} → "equipment_asset": {{"orig_text": "", "text": ""}}
+        - "risk_description": {{}} → "risk_description": {{"orig_text": "", "text": ""}}
 
     CRITICAL IMAGE PLACEMENT RULES:
     - If document has a table structure, place images in fields matching their table columns
@@ -929,14 +957,14 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
     - Extract ALL text EXACTLY as written below the section "{section_info['section_name']}" but before next section: "{next_section_name}"
     ⚠️ CRITICAL SECTION EXTRACTION (including tables):
         Look at ALL pages ({section_info['start_page']} to {section_info['end_page']})
-        You might see several section name: "{section_info['section_name']}" 
-        - When extracting section, if the section continues onto the next page, it is treated as part of the same section. 
+        You might see several section name: "{section_info['section_name']}" including table titles
+        - When extracting section, if the section or table continues onto the next page, it is treated as part of the same section or table. 
             Example: 
-            [BOLD TITLE] "{section_info['section_name']}"  ---> Section 1
+            [BOLD TITLE] "{section_info['section_name']}"  ---> Section / Table
             [TEXT 1]
             [Page Break]
             [BOLD TITLE] "{section_info['section_name']}"  (if found) 
-            [TEXT 2] ---> [concat it to the TEXT 1]
+            [TEXT 2] ---> [concat it to the TEXT 1 above]
             [BOLD TITLE] "{next_section_name}" ---> Next Section
     - Do not paraphrase or reword
     - Copy text word-for-word from the section
@@ -964,7 +992,8 @@ Wrong: {{"text": "High voltage warning", "image": ""}}
     EXTRACTION STEPS:
     1. Look at ALL pages shown ({section_info['start_page']} to {section_info['end_page']})
     2. Identify the table structure and column headers (if any)
-    3. Extract all text from section {section_info['section_name']} until next section: {next_section_name}
+    3. Extract all text from section: {section_info['section_name']} until next section: {next_section_name}
+    4. If the section/table: "{section_info['section_name']}" appears in multiple pages make sure extract all the content (Do not extract section partially)
     4. For each piece of content:
        - Extract text EXACTLY as it appears
        - Duplicate to orig_text field
