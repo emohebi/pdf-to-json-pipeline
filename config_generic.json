@@ -1,0 +1,388 @@
+{
+  "INPUT": {
+    "pdf_directory": "./input",
+    "supported_extensions": [".pdf"],
+    "dpi": 150
+  },
+
+  "TASK": {
+    "provider": "azure_openai",
+
+    "aws_bedrock": {
+      "region": "ap-southeast-2",
+      "model_region": "us-east-1",
+      "namespace": "",
+      "model_id": "au.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "role_arn_template": "arn:aws:iam::533267133246:role/{namespace}-bedrock-consumer",
+      "max_retries": 3,
+      "retry_delay": 5,
+      "read_timeout": 3600
+    },
+
+    "azure_openai": {
+      "endpoint_env": "AZURE_OPENAI_ENDPOINT",
+      "api_key_env": "AZURE_OPENAI_API_KEY",
+      "deployment_name": "gpt-4o",
+      "api_version": "2024-12-01-preview",
+      "max_retries": 3,
+      "retry_delay": 5,
+      "timeout": 600
+    },
+
+    "processing": {
+      "max_workers": 5,
+      "batch_size": 100,
+      "parallel": false,
+      "review": false,
+      "max_images_per_batch": 20
+    },
+
+    "model_params": {
+      "temperature": 0,
+      "max_tokens_detection": 4096,
+      "max_tokens_extraction": 16384,
+      "max_tokens_validation": 8192
+    },
+
+    "confidence": {
+      "threshold": 0.85,
+      "low_threshold": 0.70
+    },
+
+    "document_type": {
+      "name": "Generic Document",
+      "description": "Any PDF document. Extract all visible sections, subsections, tables, lists, and content into structured JSON."
+    },
+
+    "document_header": {
+      "fields": [
+        "title",
+        "author",
+        "date",
+        "version",
+        "document_number",
+        "organisation"
+      ],
+      "prompt": [
+        "Extract document header/metadata information from this first page.",
+        "",
+        "Look for ANY metadata typically found in document headers, title pages, or footers:",
+        "- Title or heading of the document",
+        "- Author, creator, or responsible person/team",
+        "- Date (created, published, revised, effective)",
+        "- Version or revision number",
+        "- Document number, reference, or identifier",
+        "- Organisation, company, department, or agency name",
+        "",
+        "REQUIRED JSON STRUCTURE:",
+        "{fields_json}",
+        "",
+        "RULES:",
+        "1. Extract the EXACT text as it appears - do not paraphrase.",
+        "2. If a field is not found, use an empty string: \"\"",
+        "3. Look in: page headers, footers, title blocks, cover pages, front matter.",
+        "",
+        "Return ONLY the JSON object (no markdown, start with {{):"
+      ]
+    },
+
+    "sections": {
+      "definitions": {
+        "section": "A major section of the document with a distinct heading. Captures the heading text, all body paragraphs, and any nested subsections, tables, or lists within it.",
+        "table_section": "A section that is primarily or entirely a table or grid of data, including the table title/caption if present.",
+        "list_section": "A section that is primarily a numbered or bulleted list, including the list heading.",
+        "image_section": "A section containing images, diagrams, figures, charts, or illustrations with captions.",
+        "front_matter": "Title page, table of contents, executive summary, abstract, introduction, or other front matter.",
+        "back_matter": "Appendices, references, bibliography, glossary, index, or other back matter.",
+        "unhandled_content": "Content that does not clearly belong to any other section type, or boilerplate such as disclaimers, signatures, blank pages."
+      },
+
+      "heading_aliases": {},
+
+      "schemas": {
+        "section": {
+          "heading": "",
+          "heading_level": "",
+          "body": [""],
+          "subsections": [{
+            "heading": "",
+            "heading_level": "",
+            "body": [""],
+            "tables": [{
+              "caption": "",
+              "headers": [""],
+              "rows": [[""]]
+            }],
+            "lists": [{
+              "list_title": "",
+              "items": [""]
+            }],
+            "images": [{ "text": "", "image": "" }]
+          }],
+          "tables": [{
+            "caption": "",
+            "headers": [""],
+            "rows": [[""]]
+          }],
+          "lists": [{
+            "list_title": "",
+            "items": [""]
+          }],
+          "images": [{ "text": "", "image": "" }]
+        },
+        "table_section": [{
+          "caption": "",
+          "headers": [""],
+          "rows": [[""]]
+        }],
+        "list_section": [{
+          "list_title": "",
+          "items": [""]
+        }],
+        "image_section": [{
+          "caption": "",
+          "image": "",
+          "description": ""
+        }],
+        "front_matter": {
+          "heading": "",
+          "body": [""],
+          "tables": [{
+            "caption": "",
+            "headers": [""],
+            "rows": [[""]]
+          }],
+          "lists": [{
+            "list_title": "",
+            "items": [""]
+          }]
+        },
+        "back_matter": {
+          "heading": "",
+          "body": [""],
+          "tables": [{
+            "caption": "",
+            "headers": [""],
+            "rows": [[""]]
+          }],
+          "lists": [{
+            "list_title": "",
+            "items": [""]
+          }]
+        },
+        "unhandled_content": [{ "section": "", "text": "", "image": "" }]
+      },
+
+      "assembly_order": [
+        "front_matter",
+        "section",
+        "table_section",
+        "list_section",
+        "image_section",
+        "back_matter",
+        "unhandled_content"
+      ],
+
+      "structure_types": {
+        "object": ["front_matter", "back_matter"],
+        "array": ["section", "table_section", "list_section", "image_section"]
+      },
+
+      "name_mapping": {},
+
+      "merge_rules": [
+        {
+          "section_type": "section",
+          "merge_same_type_only": false,
+          "merge_requires_same_name": true
+        }
+      ],
+
+      "empty_array_when_all_children_empty": []
+    },
+
+    "document_classification": {
+      "enabled": false,
+      "applies_to": [],
+      "default_type": "Unknown",
+      "prompt_template": [],
+      "types": {}
+    },
+
+    "prompts": {
+      "detection": {
+        "template": [
+          "Analyze this PORTION of a document and identify its major SECTIONS.",
+          "",
+          "CONTEXT:",
+          "- Document type: {document_type_name}",
+          "- Total document pages: {total_pages}",
+          "- This batch: pages {start_page} to {end_page}",
+          "",
+          "EXPECTED SECTION TYPES:",
+          "{section_definitions_json}",
+          "",
+          "HOW TO IDENTIFY SECTIONS:",
+          "1. Look for headings styled differently from body text (bold, larger font, numbered, underlined, coloured, or all-caps).",
+          "2. A heading followed by body text, a table, a list, or images = one section.",
+          "3. If the first page(s) are a cover/title page, table of contents, executive summary, or abstract, classify as 'front_matter'.",
+          "4. If the last pages are appendices, references, bibliography, glossary, or index, classify as 'back_matter'.",
+          "5. A standalone table with its own heading/caption = 'table_section'.",
+          "6. A standalone numbered/bulleted list with its own heading = 'list_section'.",
+          "7. Pages dominated by figures, charts, or diagrams = 'image_section'.",
+          "8. Everything else with a heading = 'section'.",
+          "9. Boilerplate, disclaimers, signature blocks, blank pages = 'unhandled_content'.",
+          "",
+          "RULES FOR section_name:",
+          "- Extract the EXACT heading text from the document -- do NOT paraphrase",
+          "- Preserve capitalisation, punctuation, numbers",
+          "{heading_alias_rules}",
+          "- If a section has no visible heading, use 'Untitled Section [page X]'",
+          "- Unrecognised or ambiguous content -> section_type: 'unhandled_content'",
+          "",
+          "Return ONLY a JSON array:",
+          "[",
+          "  {{",
+          "    \"section_type\": \"one of: {section_types_csv}\",",
+          "    \"section_name\": \"EXACT heading text\",",
+          "    \"start_page\": number ({start_page}-{end_page}),",
+          "    \"end_page\": number ({start_page}-{end_page}),",
+          "    \"confidence\": number (0.0-1.0)",
+          "  }}",
+          "]",
+          "",
+          "CONSTRAINTS:",
+          "- Page numbers must be between {start_page} and {end_page}",
+          "- All pages must be covered -- no gaps",
+          "- Use ONLY ASCII characters (replace unicode dashes/bullets with ASCII equivalents)",
+          "- Return valid JSON only, no markdown or extra text",
+          "",
+          "Return the JSON array now:"
+        ]
+      },
+
+      "extraction": {
+        "system_preamble": [
+          "You are an expert data extraction agent specialising in EXACT text extraction from documents.",
+          "",
+          "CRITICAL RULES:",
+          "- Copy text EXACTLY word-for-word; preserve spelling, capitalisation, punctuation",
+          "- Use ONLY ASCII characters (0-127) -- replace unicode dashes/bullets with ASCII equivalents",
+          "- DO NOT paraphrase, summarise, or infer text that is not visible",
+          "- Empty fields: use '' for strings, [] for arrays, {{}} for objects",
+          "- Never use null, 'N/A', 'Unknown', or placeholder text",
+          "- Return ONLY valid JSON -- no markdown, no extra text",
+          "- Escape special characters properly in JSON strings",
+          "",
+          "Schema to follow:",
+          "{schema}"
+        ],
+
+        "default_template": [
+          "Extract ALL information from this document section into JSON.",
+          "",
+          "Section: {section_name} ({section_type})",
+          "Pages: {start_page} to {end_page}",
+          "{image_info}",
+          "",
+          "EXTRACTION RULES:",
+          "1. Extract ALL text from section '{section_name}' up to next section '{next_section_name}'.",
+          "2. If the section continues across pages, concatenate all content.",
+          "3. Empty arrays [] instead of [\"\"].",
+          "4. Empty dicts {{}} instead of {{\"key\": \"\"}}.",
+          "",
+          "HEADING AND BODY:",
+          "- 'heading' = the EXACT section heading text as a plain string.",
+          "- 'heading_level' = the apparent nesting depth: '1' for top-level, '2' for sub-section, '3' for sub-sub, etc.",
+          "- 'body' = array of strings; each new paragraph or line break = a new string in the array.",
+          "",
+          "SUBSECTIONS:",
+          "- If you see sub-headings inside this section, nest them as objects in the 'subsections' array.",
+          "- Each subsection has its own heading, body, tables, lists, and images.",
+          "",
+          "TABLES:",
+          "- Extract every table: caption (if any), header row as array of strings, and all data rows.",
+          "- Each row is an array of cell strings.",
+          "- Preserve the exact cell text; for merged cells, repeat content or leave empty as appropriate.",
+          "",
+          "LISTS:",
+          "- Extract bulleted and numbered lists: list_title (if any) and items as an array of strings.",
+          "- Each bullet/number -> one string in the items array.",
+          "",
+          "IMAGES:",
+          "- For images: match by PAGE and POSITION from the list above, copy the EXACT path into the 'image' field.",
+          "- Include captions if present in the 'text' field.",
+          "",
+          "Look at ALL pages ({start_page} to {end_page}) and extract everything.",
+          "",
+          "Return the complete JSON now (start with {{ or [, no markdown):"
+        ],
+
+        "section_overrides": {},
+
+        "general_rules": [
+          "CRITICAL PARAGRAPH RULE:",
+          "- Each new paragraph or line break -> a new string in the body/items array.",
+          "",
+          "EMPTY FIELD HANDLING:",
+          "- If a field has no content -> use '' for strings, [] for arrays, {{}} for objects",
+          "- Empty arrays: [] instead of [\"\"]"
+        ]
+      },
+
+      "review_template": [
+        "You are a document quality reviewer. You are provided with:",
+        "1. PDF PAGE IMAGES -- the ground truth for section '{section_name}'",
+        "2. EXTRACTED TEXT pulled from those pages",
+        "",
+        "EXTRACTED TEXT:",
+        "{extracted_text}",
+        "",
+        "TASK -- compare the extracted text against the images and report:",
+        "",
+        "1. WORD_ACCURACY: words in the extracted text that do not match the image.",
+        "   Accuracy = (1 - mismatched/total_words)*100. >=95% high, >=85% medium, else low.",
+        "",
+        "2. MISSING_INFORMATION_ACCURACY: words visible in the image but absent from extracted text.",
+        "   Accuracy = (1 - missing/total_words)*100. >=95% high, >=85% medium, else low.",
+        "",
+        "3. DUPLICATION_ACCURACY: entire sections that are repeated (not individual words).",
+        "   Count >=1 duplicated sections -> low; else high.",
+        "",
+        "Return ONLY valid JSON:",
+        "{{",
+        "  \"WORD_ACCURACY\": [{{ \"section_name\": \"{section_name}\", \"issue_severity\": \"high/medium/low with %\" }}],",
+        "  \"MISSING_INFORMATION_ACCURACY\": [{{ \"section_name\": \"{section_name}\", \"issue_severity\": \"...\" }}],",
+        "  \"DUPLICATION_ACCURACY\": [{{ \"section_name\": \"{section_name}\", \"issue_severity\": \"...\" }}]",
+        "}}",
+        "",
+        "Start with {{ -- no markdown:"
+      ],
+
+      "image_description_prompt": [
+        "Analyze this image from the '{section_name}' section.",
+        "{context_hint}",
+        "Provide a SPECIFIC description (max {description_len} words) with any visible text or colours.",
+        "Return ONLY the description:"
+      ],
+
+      "image_context_hints": {
+        "_default": "Describe this image briefly, noting any text, labels, or key visual elements."
+      }
+    },
+
+    "post_processing": {
+      "sub_heading_patterns": [],
+      "sub_item_regex": "",
+      "ensure_fields_on_sequences": []
+    }
+  },
+
+  "OUTPUT": {
+    "output_directory": "./output",
+    "create_timestamp_dir": true,
+    "save_intermediates": true,
+    "save_review_results": true,
+    "file_extension": ".json"
+  }
+}

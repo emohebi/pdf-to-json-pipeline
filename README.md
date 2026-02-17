@@ -1,304 +1,166 @@
 # PDF to JSON Pipeline
 
-A semi-agentic pipeline for extracting structured JSON from PDF documents using AWS Bedrock and Strands SDK.
-
-## Features
-
-- 🤖 **Semi-Agentic Architecture**: Intelligent agents handle section detection and extraction
-- 👁️ **Vision-Powered**: Claude models extract text from images within PDFs
-- ⚡ **Parallel Processing**: Process multiple sections and documents simultaneously
-- ✅ **Human Validation**: Intermediate results stored for review
-- 🔄 **Batch & Single Mode**: Switch between processing modes
-- 📊 **Progress Tracking**: Checkpointing for large batch jobs
-- 🛡️ **Error Recovery**: Robust error handling and retry logic
+A configurable pipeline that converts PDF documents into structured JSON using LLM vision models. Supports **AWS Bedrock** and **Azure OpenAI** as LLM providers.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│         PDF Document (20-30 pages)              │
-└──────────────────┬──────────────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────────────┐
-│  STAGE 1: Section Detection Agent               │
-│  - Convert PDF pages to images                  │
-│  - Use Claude Vision to identify sections       │
-│  - Save intermediate results                    │
-└──────────────────┬──────────────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────────────┐
-│  STAGE 2: Parallel Section Extraction           │
-│  - Each section → Extraction Agent              │
-│  - Vision LLM extracts text from images         │
-│  - Save section JSONs for validation            │
-└──────────────────┬──────────────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────────────┐
-│  STAGE 3: Validation & Aggregation Agent        │
-│  - Validates each section JSON                  │
-│  - Combines into final document JSON            │
-│  - Human review if confidence < threshold       │
-└──────────────────┬──────────────────────────────┘
-                   │
-                   ▼
-                Final JSON
+INPUT (PDF files)  →  TASK (detect → extract → review → validate)  →  OUTPUT (JSON)
 ```
 
-## Project Structure
+All configuration is driven by **`config.json`** with three top-level sections:
 
-```
-pdf-to-json-pipeline/
-├── README.md
-├── requirements.txt
-├── .env.example
-├── config/
-│   ├── __init__.py
-│   ├── settings.py          # Configuration management
-│   └── schemas.py            # Document and section schemas
-├── src/
-│   ├── __init__.py
-│   ├── agents/
-│   │   ├── __init__.py
-│   │   ├── section_detector.py    # Stage 1: Section detection
-│   │   ├── section_extractor.py   # Stage 2: Data extraction
-│   │   └── validator.py            # Stage 3: Validation
-│   ├── tools/
-│   │   ├── __init__.py
-│   │   ├── bedrock_vision.py      # Bedrock API tools
-│   │   └── validation.py          # Validation utilities
-│   ├── utils/
-│   │   ├── __init__.py
-│   │   ├── pdf_processor.py       # PDF to image conversion
-│   │   ├── storage.py             # File I/O operations
-│   │   └── logger.py              # Logging configuration
-│   └── pipeline.py                 # Main orchestrator
-├── scripts/
-│   ├── run_single.py              # Process single PDF
-│   ├── run_batch.py               # Process batch of PDFs
-│   └── validate_outputs.py        # Human validation helper
-├── tests/
-│   ├── __init__.py
-│   ├── test_agents.py
-│   ├── test_pipeline.py
-│   └── test_data/
-└── output/
-    ├── intermediate/              # For human validation
-    │   ├── sections/              # Individual section JSONs
-    │   ├── detection/             # Section detection results
-    │   └── validation_queue/      # Items needing review
-    ├── final/                     # Final document JSONs
-    └── logs/                      # Processing logs
-```
+| Section   | Purpose |
+|-----------|---------|
+| `INPUT`   | PDF source directory, DPI, supported extensions |
+| `TASK`    | LLM provider, model params, section definitions, schemas, processing settings |
+| `OUTPUT`  | Output directory, timestamp dirs, intermediate file saving |
 
-## Setup
+## Quick Start
 
-### Prerequisites
+### 1. Install dependencies
 
-- Python 3.9+
-- AWS Account with Bedrock access
-- AWS credentials configured
-- Claude 3.5/4 Sonnet model access enabled in Bedrock
-
-### Installation
-
-1. Clone the repository:
-```bash
-git clone <repository-url>
-cd pdf-to-json-pipeline
-```
-
-2. Create virtual environment:
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-3. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-4. Configure environment:
-```bash
-cp .env.example .env
-# Edit .env with your settings
-```
+### 2. Configure `config.json`
 
-5. Configure AWS credentials:
-```bash
-aws configure
-# Or set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
-```
+Edit `config.json` to set your provider and credentials:
 
-## Usage
-
-### Single Document Processing
-
-```bash
-python scripts/run_single.py --pdf path/to/document.pdf
-```
-
-With custom output directory:
-```bash
-python scripts/run_single.py \
-    --pdf path/to/document.pdf \
-    --output-dir custom_output/
-```
-
-### Batch Processing
-
-```bash
-python scripts/run_batch.py --input-dir path/to/pdfs/
-```
-
-With custom settings:
-```bash
-python scripts/run_batch.py \
-    --input-dir path/to/pdfs/ \
-    --output-dir custom_output/ \
-    --workers 10 \
-    --batch-size 50
-```
-
-### Resume Failed Batch
-
-```bash
-python scripts/run_batch.py \
-    --input-dir path/to/pdfs/ \
-    --resume
-```
-
-### Human Validation Workflow
-
-1. Check validation queue:
-```bash
-python scripts/validate_outputs.py --list
-```
-
-2. Review specific document:
-```bash
-python scripts/validate_outputs.py --review DOC_ID
-```
-
-3. Approve or reject:
-```bash
-python scripts/validate_outputs.py --approve DOC_ID
-python scripts/validate_outputs.py --reject DOC_ID --reason "Missing data in section 3"
-```
-
-## Configuration
-
-### Customize Schemas
-
-Edit `config/schemas.py` to define your document structure:
-
-```python
-SECTION_DEFINITIONS = {
-    'header': 'Title page, document information',
-    'summary': 'Executive summary',
-    'body': 'Main content',
-    # Add your sections...
-}
-
-SECTION_SCHEMAS = {
-    'header': {
-        'type': 'object',
-        'properties': {
-            'title': {'type': 'string'},
-            # Define your fields...
-        }
+**For AWS Bedrock:**
+```json
+{
+  "TASK": {
+    "provider": "aws_bedrock",
+    "aws_bedrock": {
+      "region": "ap-southeast-2",
+      "model_id": "au.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "namespace": "your-namespace"
     }
+  }
 }
 ```
 
-### Adjust Settings
-
-Edit `config/settings.py` for pipeline configuration:
-
-```python
-MAX_WORKERS = 5
-BATCH_SIZE = 100
-CONFIDENCE_THRESHOLD = 0.85
-DPI = 150
-MODEL_ID = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+**For Azure OpenAI:**
+```json
+{
+  "TASK": {
+    "provider": "azure_openai",
+    "azure_openai": {
+      "endpoint_env": "AZURE_OPENAI_ENDPOINT",
+      "api_key_env": "AZURE_OPENAI_API_KEY",
+      "deployment_name": "gpt-4o",
+      "api_version": "2024-12-01-preview"
+    }
+  }
+}
 ```
 
-## Cost Estimation
-
-**For 90k documents (25 pages avg):**
-- Stage 1 (Section Detection): ~90k API calls
-- Stage 2 (Extraction): ~450k API calls (5 sections/doc)
-- Stage 3 (Validation): Minimal API usage
-
-**Estimated Total Cost:** $65k-$95k
-**Processing Time:** 4-7 days (50 workers)
-
-## Output Structure
-
-### Intermediate Results
-```
-output/intermediate/
-├── detection/
-│   └── DOC_ID_sections.json        # Detected sections
-├── sections/
-│   ├── DOC_ID_section_1.json       # Individual sections
-│   └── DOC_ID_section_2.json
-└── validation_queue/
-    └── DOC_ID_review.json          # Flagged for review
-```
-
-### Final Results
-```
-output/final/
-└── DOC_ID.json                     # Complete document JSON
-```
-
-## Monitoring
-
-View logs:
+Then set environment variables:
 ```bash
-tail -f output/logs/pipeline.log
+export AZURE_OPENAI_ENDPOINT="https://your-resource.openai.azure.com/"
+export AZURE_OPENAI_API_KEY="your-key"
 ```
 
-Check progress:
+### 3. Run
+
 ```bash
-cat output/logs/progress.json
+# Process all PDFs in the configured INPUT.pdf_directory
+python scripts/run_single.py
+
+# Process a specific PDF
+python scripts/run_single.py --pdf ./path/to/document.pdf
+
+# Override provider at runtime
+python scripts/run_single.py --provider azure_openai
+
+# Enable review stage
+python scripts/run_single.py --review
 ```
 
-## Troubleshooting
+## Configuration Reference
 
-### Common Issues
+### INPUT
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `pdf_directory` | string | `"./input"` | Directory containing PDF files |
+| `supported_extensions` | list | `[".pdf"]` | File extensions to process |
+| `dpi` | int | `150` | DPI for page rendering |
 
-**Issue:** Bedrock authentication error
+### TASK
+| Key | Type | Description |
+|-----|------|-------------|
+| `provider` | string | `"aws_bedrock"` or `"azure_openai"` |
+| `section_definitions` | object | Map of section_type → description |
+| `section_schemas` | object | JSON schemas for each section type |
+| `document_header_fields` | list | Header fields to extract from page 1 |
+| `model_params.temperature` | float | LLM temperature (0 = deterministic) |
+| `processing.parallel` | bool | Enable parallel section extraction |
+| `processing.review` | bool | Enable the review agent stage |
+
+### OUTPUT
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `output_directory` | string | `"./output"` | Base output directory |
+| `create_timestamp_dir` | bool | `true` | Create timestamped subdirectory |
+| `save_intermediates` | bool | `true` | Save intermediate results |
+
+## Customising Section Definitions and Schemas
+
+The pipeline is fully configurable for any document type. Edit `config.json`:
+
+1. **`section_definitions`** — Define what sections your documents contain and their descriptions. The detector uses these to classify document regions.
+
+2. **`section_schemas`** — Define the JSON structure for each section type. The extractor fills in these schemas with content from the PDF.
+
+3. **`document_header_fields`** — Define which metadata fields to extract from the first page.
+
+## Project Structure
+
 ```
-Solution: Check AWS credentials and region configuration
-aws sts get-caller-identity
+├── config.json                    # Main configuration
+├── config/
+│   ├── config_loader.py           # Config.json reader
+│   ├── settings.py                # Derived settings from config
+│   └── schemas_docuporter.py      # Schema helpers
+├── scripts/
+│   ├── run_single.py              # Main entry point
+│   └── validate_outputs.py        # Output validation tool
+├── src/
+│   ├── pipeline.py                # Pipeline orchestrator
+│   ├── agents/
+│   │   ├── section_detector.py    # Stage 1: Detect sections
+│   │   ├── section_extractor.py   # Stage 2: Extract content
+│   │   ├── review_agent.py        # Stage 3.5: Quality review
+│   │   ├── validator_docuporter.py # Stage 4: Validate & combine
+│   │   └── document_header_extractor.py
+│   ├── tools/
+│   │   ├── llm_provider.py        # Abstract LLM interface
+│   │   ├── bedrock_vision.py      # AWS Bedrock provider
+│   │   ├── azure_vision.py        # Azure OpenAI provider
+│   │   └── validation.py          # Data validation tools
+│   └── utils/
+│       ├── pdf_processor.py       # PDF → images + text
+│       ├── image_descriptor.py    # Image position mapping
+│       ├── storage.py             # File I/O management
+│       ├── docuporter_processor.py # DocuPorter format helpers
+│       └── logger.py
+└── requirements.txt
 ```
 
-**Issue:** Model access denied
-```
-Solution: Enable Claude model access in Bedrock console
-```
+## Environment Variable Overrides
 
-**Issue:** Out of memory
-```
-Solution: Reduce DPI or MAX_WORKERS in settings.py
-```
+Any setting from `config.json` can be overridden via environment variables:
 
-## Contributing
-
-1. Fork the repository
-2. Create feature branch
-3. Add tests
-4. Submit pull request
-
-## License
-
-MIT License
-
-## Support
-
-For issues and questions, please open a GitHub issue.
+| Variable | Overrides |
+|----------|-----------|
+| `LLM_PROVIDER` | `TASK.provider` |
+| `AWS_REGION` | `TASK.aws_bedrock.region` |
+| `BEDROCK_MODEL_ID` | `TASK.aws_bedrock.model_id` |
+| `AZURE_OPENAI_ENDPOINT` | Azure endpoint |
+| `AZURE_OPENAI_API_KEY` | Azure API key |
+| `OUTPUT_DIR` | `OUTPUT.output_directory` |
+| `DPI` | `INPUT.dpi` |
+| `MAX_WORKERS` | `TASK.processing.max_workers` |
+| `PIPELINE_CONFIG` | Path to config.json |

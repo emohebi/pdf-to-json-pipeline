@@ -1,187 +1,56 @@
 """
-Document Header Extraction Agent
-Extracts document metadata from the first page of PDF documents.
+Document Header Extraction - config-driven prompt and fields.
+No hardcoded field names or document types.
 """
 import json
 from typing import Dict, Any
 
 from config.settings import MODEL_MAX_TOKENS_EXTRACTION
-from src.tools import invoke_bedrock_multimodal, prepare_images_for_bedrock
+from config.config_loader import get_document_header_fields, get_header_prompt, render_prompt
+from src.tools.llm_provider import invoke_multimodal
+from src.tools.bedrock_vision import prepare_images_for_bedrock
 from src.utils import setup_logger
 
-logger = setup_logger('document_header_extractor')
+logger = setup_logger("document_header_extractor")
 
 
 class DocumentHeaderExtractor:
-    """Agent to extract document header information from the first page."""
-    
     def __init__(self):
-        self.logger = logger
-    
-    def extract_header(
-        self,
-        first_page_data: Dict,
-        document_id: str
-    ) -> Dict[str, Any]:
-        """
-        Extract document header information from the first page.
-        
-        Args:
-            first_page_data: Page data dict with image
-            document_id: Document ID
-            
-        Returns:
-            Document header dictionary
-        """
-        logger.info(f"[{document_id}] Extracting document header from first page")
-        
+        self.fields = get_document_header_fields()
+
+    def extract_header(self, first_page_data: Dict, document_id: str) -> Dict[str, Any]:
+        logger.info(f"[{document_id}] Extracting document header")
         try:
-            # Prepare image
-            images_b64 = prepare_images_for_bedrock([first_page_data])
-            
-            # Build prompt
-            prompt = self._build_header_extraction_prompt()
-            
-            # Extract header
-            response = invoke_bedrock_multimodal(
-                images=images_b64,
-                prompt=prompt,
-                max_tokens=MODEL_MAX_TOKENS_EXTRACTION
+            images = prepare_images_for_bedrock([first_page_data])
+            fields_json = json.dumps(
+                {f: {"text": "exact text"} for f in self.fields},
+                indent=2,
             )
-            
-            # Parse response
-            header_data = self._parse_header_response(response)
-            
-            # Add document ID and sections list
-            # header_data['Sections'] = []
-            
-            logger.info(f"[{document_id}] Successfully extracted document header")
-            return header_data
-            
+            prompt = render_prompt(get_header_prompt(), fields_json=fields_json)
+            response = invoke_multimodal(images=images, prompt=prompt, max_tokens=MODEL_MAX_TOKENS_EXTRACTION)
+            return self._parse(response)
         except Exception as e:
-            logger.error(f"[{document_id}] Failed to extract header: {e}")
-            # Return empty header structure
-            return self._get_empty_header()
-        
- # - The organization or entity that created the document (belong to document source)  
-    def _build_header_extraction_prompt(self) -> str:
-        """Build prompt for document header extraction."""
-        return """Extract document header information from this first page of the document.
+            logger.error(f"[{document_id}] Header extraction failed: {e}")
+            return self._empty()
 
-Look for the following information typically found at the top of technical/safety documents:
-1. document source - It is usually located in the top-left side of the document header (this is not in logo of the company nor the document type)
-Example:
-
-[Document Source]                                           [BHP logo]
-----------------------------------------------------------------------
-[Document Type]
-
-2. document type - Type of document (e.g., "Work Method Statement", "Safety Procedure", etc.)
-3. document number - The unique document identifier/reference number
-4. document version number - Version or revision number
-5. work description - Title or description of the work/procedure
-6. purpose - The purpose or objective of the document
-
-CRITICAL: For each field, extract the EXACT text as it appears in the document.
-Duplicate the same value for both "orig_text" and "text" fields.
-
-REQUIRED JSON STRUCTURE:
-{
-    "document_source": {
-        "orig_text": "exact text from document",
-        "text": "exact text from document"
-    },
-    "document_type": {
-        "orig_text": "exact text from document",
-        "text": "exact text from document"
-    },
-    "document_number": {
-        "orig_text": "exact text from document",
-        "text": "exact text from document"
-    },
-    "document_version_number": {
-        "orig_text": "exact text from document",
-        "text": "exact text from document"
-    },
-    "work_description": {
-        "orig_text": "exact text from document",
-        "text": "exact text from document"
-    },
-    "purpose": {
-        "orig_text": "exact text from document",
-        "text": "exact text from document"
-    }
-}
-
-EXTRACTION RULES:
-1. Look for labeled fields (e.g., "Document No:", "Version:", "Type:", etc.)
-2. Extract the EXACT text - do not paraphrase or modify
-3. Both "orig_text" and "text" should have the SAME value
-4. If a field is not found, use empty strings for both orig_text and text -> {"orig_text": "", "text": ""}
-    Example: "purpose": {"orig_text": "", "text": ""}
-5. Common locations:
-   - Headers and footers
-   - Title blocks
-   - Document control sections
-   - Top of the first page
-
-EXAMPLES:
-- If you see "Document No: WMS-2024-001" → extract "WMS-2024-001"
-- If you see "Rev 2.1" → extract "2.1" for version
-- If you see "Work Method Statement" → extract exactly as shown
-
-Return ONLY the JSON object (no markdown, start with {):
-"""
-    
-    def _parse_header_response(self, response: str) -> Dict[str, Any]:
-        """Parse the header extraction response."""
+    def _parse(self, response: str) -> Dict[str, Any]:
         try:
-            # Clean response
-            response = response.strip()
-            if response.startswith('```json'):
-                response = response[7:]
-            if response.startswith('```'):
-                response = response[3:]
-            if response.endswith('```'):
-                response = response[:-3]
-            response = response.strip()
-            
-            # Parse JSON
-            header_data = json.loads(response)
-            
-            # Validate structure and ensure all fields exist
-            required_fields = [
-                'document_source', 'document_type', 'document_number',
-                'document_version_number', 'work_description', 'purpose'
-            ]
-            
-            for field in required_fields:
-                if field not in header_data or not header_data[field]:
-                    header_data[field] = {"orig_text": "", "text": ""}
-                elif not isinstance(header_data[field], dict):
-                    # Convert to proper structure
-                    value = str(header_data[field])
-                    header_data[field] = {"orig_text": value, "text": value}
+            resp = response.strip()
+            for pfx in ("```json", "```"):
+                if resp.startswith(pfx): resp = resp[len(pfx):]
+            if resp.endswith("```"): resp = resp[:-3]
+            data = json.loads(resp.strip())
+            for f in self.fields:
+                if f not in data or not data[f]:
+                    data[f] = {"text": ""}
+                elif not isinstance(data[f], dict):
+                    v = str(data[f]); data[f] = {"text": v}
                 else:
-                    # Ensure both orig_text and text exist and match
-                    if 'text' in header_data[field] and 'orig_text' not in header_data[field]:
-                        header_data[field]['orig_text'] = header_data[field]['text']
-                    elif 'orig_text' in header_data[field] and 'text' not in header_data[field]:
-                        header_data[field]['text'] = header_data[field]['orig_text']
-            
-            return header_data
-            
+                    data[f].setdefault("text", data[f].get("text", ""))
+            return data
         except Exception as e:
-            logger.error(f"Failed to parse header response: {e}")
-            return self._get_empty_header()
-    
-    def _get_empty_header(self) -> Dict[str, Any]:
-        """Get empty header structure."""
-        return {
-            "document_source": {"orig_text": "", "text": ""},
-            "document_type": {"orig_text": "", "text": ""},
-            "document_number": {"orig_text": "", "text": ""},
-            "document_version_number": {"orig_text": "", "text": ""},
-            "work_description": {"orig_text": "", "text": ""},
-            "purpose": {"orig_text": "", "text": ""}
-        }
+            logger.error(f"Parse failed: {e}")
+            return self._empty()
+
+    def _empty(self):
+        return {f: {"text": ""} for f in self.fields}

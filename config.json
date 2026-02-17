@@ -1,0 +1,464 @@
+{
+  "INPUT": {
+    "pdf_directory": "./input",
+    "supported_extensions": [".pdf"],
+    "dpi": 150
+  },
+
+  "TASK": {
+    "provider": "aws_bedrock",
+
+    "aws_bedrock": {
+      "region": "ap-southeast-2",
+      "model_region": "us-east-1",
+      "namespace": "swscraping",
+      "model_id": "au.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "role_arn_template": "arn:aws:iam::533267133246:role/{namespace}-bedrock-consumer",
+      "max_retries": 3,
+      "retry_delay": 5,
+      "read_timeout": 3600
+    },
+
+    "azure_openai": {
+      "endpoint_env": "AZURE_OPENAI_ENDPOINT",
+      "api_key_env": "AZURE_OPENAI_API_KEY",
+      "deployment_name": "gpt-4o",
+      "api_version": "2024-12-01-preview",
+      "max_retries": 3,
+      "retry_delay": 5,
+      "timeout": 600
+    },
+
+    "processing": {
+      "max_workers": 5,
+      "batch_size": 100,
+      "parallel": false,
+      "review": false,
+      "max_images_per_batch": 20
+    },
+
+    "model_params": {
+      "temperature": 0,
+      "max_tokens_detection": 4096,
+      "max_tokens_extraction": 56000,
+      "max_tokens_validation": 8192
+    },
+
+    "confidence": {
+      "threshold": 0.85,
+      "low_threshold": 0.70
+    },
+
+    "document_type": {
+      "name": "Work Method Statement",
+      "description": "Engineering work method statements used in industrial maintenance, including safety information, task activities, risk controls, and equipment references."
+    },
+
+    "document_header": {
+      "fields": [
+        "document_source",
+        "document_type",
+        "document_number",
+        "document_version_number",
+        "work_description",
+        "purpose"
+      ],
+      "prompt": [
+        "Extract document header information from this first page.",
+        "",
+        "Look for typical header metadata such as:",
+        "- Document source, type, number, version",
+        "- Title, description, or purpose of the document",
+        "- Any other labelled fields in headers, title blocks, or document control areas",
+        "",
+        "Hints for locating fields:",
+        "- document_source: Usually top-left of the header (not a logo or document type)",
+        "- document_type: e.g. 'Work Method Statement', 'Safety Procedure'",
+        "- document_number: Unique identifier/reference number",
+        "- document_version_number: Version or revision number",
+        "- work_description: Title or description of the work/procedure",
+        "- purpose: Objective of the document",
+        "",
+        "REQUIRED JSON STRUCTURE:",
+        "{fields_json}",
+        "",
+        "RULES:",
+        "1. Extract the EXACT text as it appears - do not paraphrase.",
+        "2. Both 'orig_text' and 'text' should contain the SAME value.",
+        "3. If a field is not found, use empty strings: {\"orig_text\": \"\", \"text\": \"\"}",
+        "4. Common locations: page headers/footers, title blocks, document control sections.",
+        "",
+        "Return ONLY the JSON object (no markdown, start with {):"
+      ]
+    },
+
+    "sections": {
+      "definitions": {
+        "safety": "Safety information section including icons, statements, and additional safety notes",
+        "material_risks_and_controls": "Material risks and their associated critical controls",
+        "task_activities": "Task activities, including Pre-Task Activities and Post-Task Activities, with sequences and steps in flat structure",
+        "additional_controls_required": "Additional controls required with control types and reasons",
+        "additional_ppe_required": "Additional personal protective equipment (PPE) required",
+        "specific_competencies_knowledge_and_skills": "Specific competencies, knowledge and skills required",
+        "tooling_equipment_required": "Tooling and equipment required including tool sets",
+        "reference_documentation": "Reference documentation with document numbers and descriptions",
+        "reference_drawings": "Reference drawings including mechanical and structural/civil drawings",
+        "attached images": "Attached images and diagrams",
+        "unhandled_content": "Content that does not fit into defined sections or the content related to: feedback, work sign on/off, work completion, etc"
+      },
+
+      "heading_aliases": {
+        "Pre-Task Activities": "task_activities",
+        "Post-Task Activities": "task_activities",
+        "PRE-TASK ACTIVITIES": "task_activities",
+        "POST-TASK ACTIVITIES": "task_activities"
+      },
+
+      "schemas": {
+        "safety": {
+          "safety_icon": { "orig_text": "", "orig_image": "", "text": "", "image": "" },
+          "safety_statement": [{ "orig_text": "", "orig_image": "", "text": "", "image": "" }],
+          "safety_additional": [{ "orig_seq": "", "orig_text": "", "seq": "", "text": "" }]
+        },
+        "material_risks_and_controls": [{
+          "risk": { "orig_text": "", "orig_image": "", "text": "", "image": "" },
+          "risk_description": { "orig_text": "", "orig_image": "", "text": "", "image": "" },
+          "critical_controls": [{ "orig_text": "", "orig_image": "", "text": "", "image": "" }]
+        }],
+        "additional_controls_required": [{
+          "control_type": { "orig_text": "", "orig_image": "", "text": "", "image": "" },
+          "reason_for_control": [{ "orig_text": "", "orig_image": "", "text": "", "image": "" }]
+        }],
+        "additional_ppe_required": [{ "orig_text": "", "orig_image": "", "text": "", "image": "" }],
+        "specific_competencies_knowledge_and_skills": [{ "orig_text": "", "orig_image": "", "text": "", "image": "" }],
+        "tooling_equipment_required": [{
+          "tool_set": { "orig_text": "", "text": "" },
+          "tools": [{ "orig_text": "", "text": "" }]
+        }],
+        "reference_documentation": [{
+          "document_reference_number": { "orig_text": "", "orig_image": "", "text": "", "image": "" },
+          "document_description": { "orig_text": "", "orig_image": "", "text": "", "image": "" }
+        }],
+        "reference_drawings": [{
+          "mechanical_drawings": [{ "orig_text": "", "orig_image": "", "text": "", "image": "" }],
+          "structural_civil_drawings": [{ "orig_text": "", "orig_image": "", "text": "", "image": "" }]
+        }],
+        "attached images": [{ "orig_text": "", "orig_image": "", "text": "", "image": "" }],
+        "task_activities": [{
+          "equipment_asset": { "orig_text": "", "text": "" },
+          "sequence_no": { "orig_text": "", "text": "" },
+          "sequence_name": { "orig_text": "", "text": "" },
+          "maintainable_item": [{ "orig_text": "", "text": "" }],
+          "lmi": [{ "orig_text": "", "text": "" }],
+          "step_no": { "orig_text": "", "orig_image": "", "text": "", "image": "" },
+          "step_description": [{ "orig_text": "", "orig_image": "", "text": "", "image": "" }],
+          "photo_diagram": [{ "orig_text": "", "orig_image": "", "text": "", "image": "" }],
+          "notes": [{ "orig_text": "", "orig_image": "", "text": "", "image": "" }],
+          "acceptable_limit": [{ "orig_text": "", "orig_image": "", "text": "", "image": "" }],
+          "question": [{ "orig_text": "", "orig_image": "", "text": "", "image": "" }],
+          "corrective_action": [{ "orig_text": "", "orig_image": "", "text": "", "image": "" }],
+          "execution_condition": { "orig_text": "", "text": "" },
+          "other_content": [{ "orig_text": "", "orig_image": "", "text": "", "image": "" }]
+        }],
+        "unhandled_content": [{ "section": "", "orig_text": "", "orig_image": "", "text": "", "image": "" }]
+      },
+
+      "assembly_order": [
+        "safety",
+        "material_risks_and_controls",
+        "additional_controls_required",
+        "additional_ppe_required",
+        "specific_competencies_knowledge_and_skills",
+        "tooling_equipment_required",
+        "reference_documentation",
+        "attached images",
+        "task_activities",
+        "unhandled_content"
+      ],
+
+      "structure_types": {
+        "object": ["safety"],
+        "array": [
+          "material_risks_and_controls",
+          "additional_controls_required",
+          "additional_ppe_required",
+          "specific_competencies_knowledge_and_skills",
+          "tooling_equipment_required",
+          "reference_documentation",
+          "reference_drawings",
+          "attached images",
+          "task_activities"
+        ]
+      },
+
+      "name_mapping": {
+        "attached_images": "attached images"
+      },
+
+      "merge_rules": [
+        {
+          "section_type": "task_activities",
+          "merge_same_type_only": true,
+          "merge_requires_same_name": false
+        }
+      ],
+
+      "empty_array_when_all_children_empty": [
+        "material_risks_and_controls"
+      ]
+    },
+
+    "document_classification": {
+      "enabled": true,
+      "applies_to": ["task_activities"],
+      "default_type": "PMI",
+
+      "prompt_template": [
+        "Classify this document section.",
+        "",
+        "Section: {section_name} (pages {start_page}-{end_page})",
+        "",
+        "Look at the pages and decide which type this document is:",
+        "{type_hints}",
+        "",
+        "Return ONLY the type name (e.g. \"{type_names}\") or \"Unknown\". No extra text."
+      ],
+
+      "types": {
+        "WIN": {
+          "match_keyword": "win",
+          "detection_hints": "Look for indicators like 'Tasks to be Done Under Running Conditions' or 'Tasks to be done under Isolation'",
+          "extraction_guidance": [
+            "WORK INSTRUCTION (WIN) RULES:",
+            "1. Find sequences: bold titles (sometimes numbered '1 JOB PREP', sometimes not).",
+            "2. Look for sub-headings with black background (execution conditions):",
+            "   - 'Tasks to be done under Isolation' -> execution_condition: 'Isolation'",
+            "   - 'Pre-Isolation Tasks' -> execution_condition: 'Pre-Isolation'",
+            "   - 'Post-Isolation Tasks' -> execution_condition: 'Post-Isolation'",
+            "   - 'De-Isolation Tasks' -> execution_condition: 'De-Isolation'",
+            "3. SCENARIO 1: If a numbered sequence appears right BEFORE a sub-heading,",
+            "   the sub-heading defines execution_condition only -- its sub-items (a., b., ...) belong to that sequence.",
+            "4. SCENARIO 2: Otherwise the sub-heading IS a sequence (empty sequence_no) with its own sub-items.",
+            "5. 'Pre-Task Activities' / 'Post-Task Activities' -> sequence with empty fields, no steps.",
+            "6. 'HANDOVER TASKS', 'HOUSEKEEPING TASKS' headings -> sequences within task_activities.",
+            "7. Sequences are usually in a table with columns 'No.', 'Task Steps', 'Photo or Diagram' and 'Notes'.",
+            "8. If you see 'HANDOVER TASKS', 'HOUSEKEEPING TASKS' or 'HOUSE KEEPING' black banner,",
+            "   these are sequences and the items under them are steps."
+          ]
+        },
+        "PMI": {
+          "match_keyword": "pmi",
+          "detection_hints": "Look for 'Preventive Task Description' in headers/tables or document is about maintainable items, or 'The following Tasks are applicable to all the maintenance items listed below'",
+          "extraction_guidance": [
+            "PREVENTIVE MAINTENANCE (PMI) RULES:",
+            "1. Look for 'The following Tasks are applicable to all the maintenance items listed below'",
+            "   and bold titles as sequence dividers.",
+            "2. SCENARIO 1: Divider text alone (no bold title after) -> sequence with no name/number.",
+            "3. SCENARIO 2: Divider text + bold title after -> sequence named by the bold title.",
+            "4. Report maintainable items for ALL steps in that sequence.",
+            "5. If a sequence has a name but no maintainable items table, duplicate sequence_name to maintainable_item.",
+            "6. 'Pre-Task Activities' / 'Post-Task Activities' -> sequence with empty step fields.",
+            "7. 'Execution Condition' headings -> set execution_condition for subsequent sequences.",
+            "8. NEVER mix content (including maintainable items) across sequence boundaries.",
+            "9. Count how many sequences you will create before starting extraction."
+          ]
+        }
+      }
+    },
+
+    "prompts": {
+      "detection": {
+        "template": [
+          "Analyze this PORTION of a document and identify its major SECTIONS.",
+          "",
+          "CONTEXT:",
+          "- Document type: {document_type_name}",
+          "- Total document pages: {total_pages}",
+          "- This batch: pages {start_page} to {end_page}",
+          "",
+          "EXPECTED SECTION TYPES:",
+          "{section_definitions_json}",
+          "",
+          "IMPORTANT DISTINCTIONS:",
+          "1. DOCUMENT SECTIONS (identify these):",
+          "   - Major document divisions with descriptive headings",
+          "   - Usually styled differently (bold, larger font, different colour/background)",
+          "   - Divide the document into logical parts",
+          "",
+          "2. NUMBERED SEQUENCES / STEPS (ignore these):",
+          "   - Numbered steps or tasks WITHIN a section",
+          "   - These belong inside their parent section, not as separate sections",
+          "",
+          "RULES FOR section_name:",
+          "- Extract the EXACT heading text from the document -- do NOT paraphrase",
+          "- Preserve capitalisation, punctuation, numbers",
+          "{heading_alias_rules}",
+          "- If a section has no visible heading, use 'Untitled Section [page X]'",
+          "- Unrecognised sections -> section_type: 'unhandled_content'",
+          "- Section heading background colour is usually black (table header style)",
+          "- 'FEEDBACK', 'SIGN OFF' type sections -> 'unhandled_content'",
+          "",
+          "Return ONLY a JSON array:",
+          "[",
+          "  {{",
+          "    \"section_type\": \"one of: {section_types_csv}\",",
+          "    \"section_name\": \"EXACT heading text\",",
+          "    \"start_page\": number ({start_page}-{end_page}),",
+          "    \"end_page\": number ({start_page}-{end_page}),",
+          "    \"confidence\": number (0.0-1.0)",
+          "  }}",
+          "]",
+          "",
+          "CONSTRAINTS:",
+          "- Page numbers must be between {start_page} and {end_page}",
+          "- All pages must be covered -- no gaps",
+          "- Use ONLY ASCII characters (replace unicode dashes/bullets with ASCII equivalents)",
+          "- Return valid JSON only, no markdown or extra text",
+          "",
+          "Return the JSON array now:"
+        ]
+      },
+
+      "extraction": {
+        "system_preamble": [
+          "You are an expert data extraction agent specialising in EXACT text extraction from documents.",
+          "",
+          "CRITICAL RULES:",
+          "- Copy text EXACTLY word-for-word; preserve spelling, capitalisation, punctuation",
+          "- Use ONLY ASCII characters (0-127) -- replace unicode dashes/bullets with ASCII equivalents",
+          "- DO NOT paraphrase, summarise, or infer text that is not visible",
+          "- For both 'orig_text' and 'text' fields: populate with the SAME extracted value",
+          "- For both 'orig_image' and 'image' fields: populate with the SAME path",
+          "- Empty fields: use '' for strings, [] for arrays, {} for objects",
+          "- Never use null, 'N/A', 'Unknown', or placeholder text",
+          "- Return ONLY valid JSON -- no markdown, no extra text",
+          "- Escape special characters properly in JSON strings",
+          "",
+          "Schema to follow:",
+          "{schema}"
+        ],
+
+        "default_template": [
+          "Extract all information from this document section into JSON.",
+          "",
+          "Section: {section_name} ({section_type})",
+          "Pages: {start_page} to {end_page}",
+          "{image_info}",
+          "",
+          "EXTRACTION RULES:",
+          "1. Extract ALL text from section '{section_name}' up to next section '{next_section_name}'.",
+          "2. If the section/table continues across pages, concatenate all content.",
+          "3. Duplicate all values to orig_ fields (orig_text = text, orig_image = image).",
+          "4. Empty arrays [] instead of [{\"orig_text\": \"\", \"text\": \"\"}].",
+          "5. Empty dicts {} instead of {\"orig_text\": \"\", \"text\": \"\"}.",
+          "6. For images: match by PAGE and POSITION from the list above, copy the EXACT path.",
+          "7. Each new paragraph or new line -> separate text field object in a list.",
+          "8. Extract text FROM icons; do not describe them.",
+          "9. If you see multiple images in one field, populate them all in the list.",
+          "10. Place images in the field that matches their TABLE COLUMN position.",
+          "",
+          "Look at ALL pages ({start_page} to {end_page}) and extract all content.",
+          "If the section appears on multiple pages, extract everything.",
+          "",
+          "Return the complete JSON now (start with {{ or [, no markdown):"
+        ],
+
+        "section_overrides": {
+          "task_activities": [
+            "Extract all information from this section into a FLAT JSON array.",
+            "",
+            "Section: {section_name} (pages {start_page}-{end_page})",
+            "{image_info}",
+            "",
+            "REQUIRED: Each STEP is a separate object in the array.",
+            "Sequence information must be REPEATED for each step in that sequence.",
+            "If a sequence has 0 steps, create 1 object with empty step fields.",
+            "",
+            "{doc_type_guidance}",
+            "",
+            "GENERAL RULES:",
+            "- New paragraph / new line -> separate text field object in a list.",
+            "- Duplicate all orig_ fields: orig_text = text, orig_image = image.",
+            "- If step description continues across a page break, it is the SAME step.",
+            "- Do NOT populate 'equipment_asset' unless explicitly present.",
+            "- Extract text FROM icons; do not describe them.",
+            "- Use ONLY ASCII characters.",
+            "- Map images to correct fields by table column position.",
+            "- Empty fields -> [] or {}.",
+            "- Look at ALL pages ({start_page} to {end_page}).",
+            "- If you see multiple images in one field, populate them all as a list.",
+            "- Carefully check images and populate in the correct JSON fields.",
+            "",
+            "Return the complete JSON array now (start with [, no markdown):"
+          ]
+        },
+
+        "general_rules": [
+          "CRITICAL PARAGRAPH RULE:",
+          "- If text continues to the next paragraph or new line, create a new text field object.",
+          "",
+          "FIELD DUPLICATION RULE:",
+          "- ALL 'orig_' fields must have the SAME value as their corresponding field.",
+          "",
+          "EMPTY FIELD HANDLING:",
+          "- If both text and image are empty -> use [] or {}",
+          "- Empty arrays: [] instead of [{\"orig_text\": \"\", \"text\": \"\"}]"
+        ]
+      },
+
+      "review_template": [
+        "You are a document quality reviewer. You are provided with:",
+        "1. PDF PAGE IMAGES -- the ground truth for section '{section_name}'",
+        "2. EXTRACTED TEXT pulled from those pages",
+        "",
+        "EXTRACTED TEXT:",
+        "{extracted_text}",
+        "",
+        "TASK -- compare the extracted text against the images and report:",
+        "",
+        "1. WORD_ACCURACY: words in the extracted text that do not match the image.",
+        "   Accuracy = (1 - mismatched/total_words)*100. >=95% high, >=85% medium, else low.",
+        "",
+        "2. MISSING_INFORMATION_ACCURACY: words visible in the image but absent from extracted text.",
+        "   Accuracy = (1 - missing/total_words)*100. >=95% high, >=85% medium, else low.",
+        "",
+        "3. DUPLICATION_ACCURACY: entire sections that are repeated (not individual words).",
+        "   Count >=1 duplicated sections -> low; else high.",
+        "",
+        "Return ONLY valid JSON:",
+        "{{",
+        "  \"WORD_ACCURACY\": [{{ \"section_name\": \"{section_name}\", \"issue_severity\": \"high/medium/low with %\" }}],",
+        "  \"MISSING_INFORMATION_ACCURACY\": [{{ \"section_name\": \"{section_name}\", \"issue_severity\": \"...\" }}],",
+        "  \"DUPLICATION_ACCURACY\": [{{ \"section_name\": \"{section_name}\", \"issue_severity\": \"...\" }}]",
+        "}}",
+        "",
+        "Start with {{ -- no markdown:"
+      ],
+
+      "image_description_prompt": [
+        "Analyze this image from the '{section_name}' section.",
+        "{context_hint}",
+        "Provide a SPECIFIC description (max {description_len} words) with any visible text or colours.",
+        "Return ONLY the description:"
+      ],
+
+      "image_context_hints": {
+        "_default": "Describe this image briefly."
+      }
+    },
+
+    "post_processing": {
+      "sub_heading_patterns": [],
+      "sub_item_regex": "^[a-z]\\.|^\\d+[a-z]",
+      "ensure_fields_on_sequences": []
+    }
+  },
+
+  "OUTPUT": {
+    "output_directory": "./output",
+    "create_timestamp_dir": true,
+    "save_intermediates": true,
+    "save_review_results": true,
+    "file_extension": ".json"
+  }
+}

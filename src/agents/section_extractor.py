@@ -1,1121 +1,280 @@
 """
-Stage 2: Section Extraction Agent - Exact Text Extraction Version
-Extracts structured data from document sections with EXACT text preservation.
-FIXED: task_activities now uses proper hierarchical structure (sequence -> steps)
-ENHANCED: Better handling of graphical elements and multiple images
-MODIFIED: Maintainable items now create a separate sequence with empty sequence_no, sequence_name, and steps
+Stage 2: Section Extraction Agent - FULLY GENERIC.
+All prompts, section-specific behavior, and document classification
+are driven entirely by config.json. No hardcoded section types.
 """
 import json
 import re
 from typing import Dict, List, Tuple, Any, Union
 
 from config.settings import MODEL_MAX_TOKENS_EXTRACTION
-from config.schemas_docuporter import get_section_schema
-from src.tools import invoke_bedrock_multimodal, prepare_images_for_bedrock
+from config.config_loader import (
+    get_extraction_preamble,
+    get_section_extraction_prompt,
+    get_extraction_general_rules,
+    get_document_classification_config,
+    join_prompt,
+    render_prompt,
+)
+from src.tools.llm_provider import invoke_multimodal
+from src.tools.bedrock_vision import prepare_images_for_bedrock
 from src.utils import setup_logger, StorageManager
 
-logger = setup_logger('section_extractor')
+logger = setup_logger("section_extractor")
 
 
 # ============================================================================
-# HELPER FUNCTIONS (self-contained, no external dependencies)
+# HELPERS
 # ============================================================================
 
 def clean_json_response(response: str) -> str:
-    """Clean and fix common JSON issues from LLM responses."""
     response = response.strip()
-    
-    # Remove markdown code blocks
-    if response.startswith('```json'):
-        response = response[7:]
-    if response.startswith('```'):
-        response = response[3:]
-    if response.endswith('```'):
+    for pfx in ("```json", "```"):
+        if response.startswith(pfx):
+            response = response[len(pfx):]
+    if response.endswith("```"):
         response = response[:-3]
-    
     response = response.strip()
-    
-    # Fix trailing commas
-    response = re.sub(r',\s*([}\]])', r'\1', response)
-    
-    # Try to find valid JSON if response has extra text
-    # Look for first { or [
-    start_idx = -1
-    for i, char in enumerate(response):
-        if char in ['{', '[']:
-            start_idx = i
+    response = re.sub(r",\s*([}\]])", r"\1", response)
+    for i, ch in enumerate(response):
+        if ch in "{[":
+            response = response[i:]
             break
-    
-    if start_idx > 0:
-        response = response[start_idx:]
-    
-    # Try to find last } or ]
-    end_idx = -1
     for i in range(len(response) - 1, -1, -1):
-        if response[i] in ['}', ']']:
-            end_idx = i + 1
+        if response[i] in "}]":
+            response = response[: i + 1]
             break
-    
-    if end_idx > 0:
-        response = response[:end_idx]
-    
     return response
 
 
-def check_dict_empty(data: Dict[str, Any]) -> bool:
-    """
-    Check if a dictionary has mostly empty values.
-    
-    Args:
-        data: Dictionary to check
-        
-    Returns:
-        True if mostly empty, False otherwise
-    """
+def _check_dict_empty(data: Dict) -> bool:
     if not data:
         return True
-    
-    empty_count = 0
-    total_count = 0
-    
-    for key, value in data.items():
-        total_count += 1
-        
-        if value is None or value == "":
-            empty_count += 1
-        elif isinstance(value, str) and value.strip() == "":
-            empty_count += 1
-        elif isinstance(value, list) and len(value) == 0:
-            empty_count += 1
-        elif isinstance(value, dict):
-            if check_dict_empty(value):
-                empty_count += 1
-    
-    # Consider mostly empty if more than 50% of fields are empty
-    return empty_count > (total_count * 0.5) if total_count > 0 else True
+    empty = total = 0
+    for v in data.values():
+        total += 1
+        if v is None or v == "" or (isinstance(v, str) and not v.strip()):
+            empty += 1
+        elif isinstance(v, list) and not v:
+            empty += 1
+        elif isinstance(v, dict) and _check_dict_empty(v):
+            empty += 1
+    return empty > total * 0.5 if total else True
 
 
-def calculate_confidence_score(
-    extracted_data: Any,
-    section_type: str
-) -> Tuple[float, List[str]]:
-    """
-    Calculate confidence score for extracted section data.
-    
-    Args:
-        extracted_data: The extracted data (can be dict, list, or any JSON type)
-        section_type: Type of section
-        
-    Returns:
-        Tuple of (confidence_score, list_of_issues)
-    """
-    issues = []
-    confidence = 1.0
-    
-    try:
-        # Handle different data types
-        if extracted_data is None:
-            issues.append("No data extracted")
-            return 0.0, issues
-        
-        # For array-type sections
-        if isinstance(extracted_data, list):
-            if len(extracted_data) == 0:
-                issues.append("Empty array")
-                confidence -= 0.3
-            else:
-                # Check items in array
-                empty_items = 0
-                for idx, item in enumerate(extracted_data):
-                    if isinstance(item, dict):
-                        item_empty = check_dict_empty(item)
-                        if item_empty:
-                            empty_items += 1
-                
-                if empty_items > 0:
-                    ratio = empty_items / len(extracted_data)
-                    confidence -= (ratio * 0.2)
-                    issues.append(f"{empty_items}/{len(extracted_data)} items are empty or incomplete")
-        
-        # For object-type sections
-        elif isinstance(extracted_data, dict):
-            # Check if dict has content
-            if not extracted_data or len(extracted_data) == 0:
-                issues.append("Empty object")
-                confidence -= 0.3
-            else:
-                empty_fields = check_dict_empty(extracted_data)
-                if empty_fields:
-                    confidence -= 0.2
-                    issues.append("Some fields are empty")
-        
-        # Ensure confidence is between 0 and 1
-        confidence = max(0.0, min(1.0, confidence))
-        
-        return confidence, issues
-        
-    except Exception as e:
-        logger.error(f"Error calculating confidence: {e}")
-        return 0.5, [f"Error in validation: {str(e)}"]
+def calculate_confidence_score(extracted: Any, section_type: str) -> Tuple[float, List[str]]:
+    issues, conf = [], 1.0
+    if extracted is None:
+        return 0.0, ["No data"]
+    if isinstance(extracted, list):
+        if not extracted:
+            conf -= 0.3; issues.append("Empty array")
+        else:
+            empty_n = sum(1 for it in extracted if isinstance(it, dict) and _check_dict_empty(it))
+            if empty_n:
+                conf -= (empty_n / len(extracted)) * 0.2
+                issues.append(f"{empty_n}/{len(extracted)} items empty")
+    elif isinstance(extracted, dict):
+        if not extracted:
+            conf -= 0.3; issues.append("Empty object")
+        elif _check_dict_empty(extracted):
+            conf -= 0.2; issues.append("Some fields empty")
+    return max(0.0, min(1.0, conf)), issues
 
 
 # ============================================================================
-# SECTION EXTRACTION AGENT
+# GENERIC SECTION EXTRACTION AGENT
 # ============================================================================
 
 class SectionExtractionAgent:
-    """Agent to extract structured data from document sections with exact text preservation."""
-    
+    """
+    Fully generic section extractor.
+    Reads ALL prompts and section-specific behavior from config.json.
+    """
+
     def __init__(self, section_schema: Dict):
         self.section_schema = section_schema
         self.storage = StorageManager()
-        self.system_prompt = self._build_system_prompt()
-    
-    def _build_system_prompt(self) -> str:
-        return f"""You are an expert data extraction agent specializing in EXACT text extraction from documents.
+        self._cls_config = get_document_classification_config()
 
-Your task:
-1. Analyze all provided document pages/images carefully
-2. Extract ALL text EXACTLY as it appears - DO NOT paraphrase, reword, or summarize
-3. Extract text embedded in images, diagrams, and charts EXACTLY as shown
-4. Preserve original spelling, capitalization, punctuation, and formatting
-5. Structure the data according to the provided JSON schema
-6. Be thorough - don't miss any information
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
-CRITICAL RULES FOR SCHEMA PRESERVATION:
-✓ ALWAYS include EVERY key from the provided schema
-✓ NEVER omit fields, even if they are empty
-✓ NEVER add fields that aren't in the schema
-✓ NEVER rename or modify field names
-✓ Use appropriate empty values for missing data:
-  - String fields: ""
-  - Object fields: include all subfields with empty values
-
-CRITICAL RULES FOR TEXT EXTRACTION:
-✓ Copy text EXACTLY word-for-word from the document
-✓ Preserve ALL original text including:
-  - Exact spelling (even if misspelled)
-  - Original capitalization
-  - Original punctuation
-  - Numbers and codes as written
-  - Special characters and symbols
-  - Use ONLY ASCII characters (0-127) - replace unicode (- → -, • → *) with ASCII equivalents
-✗ DO NOT paraphrase or reword any text
-✗ DO NOT summarize or shorten text
-✗ DO NOT correct spelling or grammar
-✗ DO NOT generate or infer text that isn't visible
-✗ DO NOT use placeholder text like "N/A", "Unknown", "See image", etc.
-
-RULES FOR "text" FIELDS:
-- Extract the visible text EXACTLY as it appears
-- If text is in an image, extract it EXACTLY
-- If no text is present, use empty string: ""
-- If text is partially visible, extract what you can see
-- Preserve line breaks and formatting where relevant
-
-RULES FOR "image" FIELDS:
-- Extract text embedded in images
-- Example: Document shows image with text: "DANGER HIGH VOLTAGE" extract it exactly
-- If no image is present, use empty string: ""
-
-RULES FOR EMPTY OR MISSING DATA:
-- Use empty string "" for text fields with no content
-- Empty array of objects: []
-- Empty dictionary: {{}}
-- But the field MUST STILL BE PRESENT
-    Exception for "material_risks_and_controls" section:
-    If all children fields are empty then remove children fields and keep only the parent field as empty []
-    Example:
-        "material_risks_and_controls": [{{"risk": {{}},"risk_description": {{}},"critical_controls": []}}]
-
-    Result:
-        "material_risks_and_controls": []
-
-- DO NOT use null, "N/A", "Unknown", or any placeholder text
-- If a section/table continues to the next page make sure to extract the whole content
-- If a section doesn't exist, return the minimum valid structure
-
-Schema to follow:
-{json.dumps(self.section_schema, indent=2)}
-
-OUTPUT FORMAT:
-- Return ONLY valid JSON matching the schema exactly
-- Include EVERY field from the schema
-- Use empty values, never omit fields (Exception for "material_risks_and_controls" section as explained above)
-- No markdown code blocks (no ```json```)
-- No additional text, explanations, or comments
-- Start directly with {{ or [
-- End with }} or ]
-- CRITICAL: Escape special characters in strings:
-  * Use \\" for quotes inside strings
-  * Use \\\\ for backslashes
-  * Use \\n for newlines
-- Ensure ALL strings are properly closed with "
-- Remove trailing commas before ] or }}
-
-EXAMPLES OF CORRECT EXTRACTION:
-
-Document shows: "WARNING: Do not operate without safety guard"
-Correct: {{"text": "WARNING: Do not operate without safety guard", "image": ""}}
-Wrong: {{"text": "Warning about safety guard operation", "image": ""}}
-
-Document shows: "Step 1: Remove bolts A, B, and C"
-Correct: {{"text": "Step 1: Remove bolts A, B, and C", "image": ""}}
-Wrong: {{"text": "Remove the three bolts", "image": ""}}
-
-Document shows image with text: "DANGER HIGH VOLTAGE"
-Correct: {{"text": "DANGER HIGH VOLTAGE", "image": ""}}
-Wrong: {{"text": "High voltage warning", "image": ""}}
-"""
-    
     def extract_section(
         self,
         section_pages: List[Dict],
         section_info: Dict,
         next_section_name: str,
         document_id: str,
-        image_mapping_data: List[Dict] = None,  # CHANGED: Now a list of mappings
-        image_prompt_text: str = ""              # NEW: Pre-formatted prompt text
+        image_mapping_data: List[Dict] = None,
+        image_prompt_text: str = "",
     ) -> Dict:
-        """
-        Extract section with POSITIONAL image information.
-        
-        Args:
-            section_pages: List of page data dicts
-            section_info: Section metadata
-            next_section_name: Name of next section
-            document_id: Document ID
-            image_mapping_data: List of positional image mappings (NEW format)
-            image_prompt_text: Pre-formatted prompt text for images (NEW)
-        """
-        logger.info(
-            f"[{document_id}] Extracting: {section_info['section_name']} "
-            f"(pages {section_info['start_page']}-{section_info['end_page']})"
-        )
-        
+        section_type = section_info["section_type"]
+        section_name = section_info["section_name"]
+        start_page = section_info["start_page"]
+        end_page = section_info["end_page"]
+
+        logger.info(f"[{document_id}] Extracting: {section_name} (pages {start_page}-{end_page})")
+        response = ""
         try:
             images_b64 = prepare_images_for_bedrock(section_pages)
-            
-            # Build prompt with POSITIONAL image information
-            if section_info['section_type'] == 'task_activities':
-                doc_cls_prompt = self._build_doc_classification_prompt(section_info)
-                response = invoke_bedrock_multimodal(
-                    images=images_b64,
-                    prompt=doc_cls_prompt,
-                    max_tokens=MODEL_MAX_TOKENS_EXTRACTION
-                )
-                doc_type = 'WIN' if "win" in response.lower() else "PMI"
-                logger.info(f"doc type: {doc_type}")
-                
-                # Pass the pre-formatted image prompt text
-                prompt = self._build_task_activities_prompt(
-                    section_info, 
-                    image_mapping_data,      # Pass mapping data
-                    image_prompt_text,       # Pass formatted prompt
-                    doc_type
-                )
-            else:
-                prompt = self._build_extraction_prompt(
-                    section_info, 
-                    next_section_name, 
-                    image_mapping_data,      # Pass mapping data
-                    image_prompt_text        # Pass formatted prompt
-                )
-            
-            response = invoke_bedrock_multimodal(
-                images=images_b64,
-                prompt=prompt,
-                max_tokens=MODEL_MAX_TOKENS_EXTRACTION
+
+            # --- Document classification (config-driven) ---
+            doc_type_guidance = ""
+            if self._needs_classification(section_type):
+                doc_type = self._classify_document(images_b64, section_info, document_id)
+                doc_type_guidance = self._get_type_guidance(doc_type)
+
+            # --- Build prompt ---
+            prompt = self._build_prompt(
+                section_info, next_section_name,
+                image_prompt_text, doc_type_guidance,
             )
-            
+
+            # --- Invoke LLM ---
+            response = invoke_multimodal(images=images_b64, prompt=prompt, max_tokens=MODEL_MAX_TOKENS_EXTRACTION)
             response = response.replace(" -- ", " - ")
+            section_json = self._parse(response)
 
-            section_json = self._parse_extraction_response(response)
-
-            # section_json = self._validate_and_fix_schema(section_json, self.section_schema)
-            
-            # Rest of the method remains the same...
-            confidence, issues = calculate_confidence_score(
-                section_json,
-                section_info['section_type']
-            )
-            
+            confidence, issues = calculate_confidence_score(section_json, section_type)
             result = {
-                'section_name': section_info['section_name'],
-                'page_range': [section_info['start_page'], section_info['end_page']],
-                'data': section_json,
-                '_metadata': {
-                    'section_type': section_info['section_type'],
-                    'confidence': confidence,
-                    'quality_issues': issues
-                }
+                "section_name": section_name,
+                "page_range": [start_page, end_page],
+                "data": section_json,
+                "_metadata": {
+                    "section_type": section_type,
+                    "confidence": confidence,
+                    "quality_issues": issues,
+                },
             }
-            
-            self.storage.save_section_json(
-                document_id,
-                section_info['section_name'],
-                result,
-                confidence
-            )
-            
-            logger.info(
-                f"[{document_id}] Extracted {section_info['section_name']} "
-                f"(confidence: {confidence:.2f})"
-            )
-            
+            self.storage.save_section_json(document_id, section_name, result, confidence)
+            logger.info(f"[{document_id}] Extracted {section_name} (confidence: {confidence:.2f})")
             return result
-            
+
         except Exception as e:
-            logger.error(
-                f"[{document_id}] Failed to extract {section_info['section_name']}: {e}"
-            )
-            logger.error(f"RESPONSE: {response}")
+            logger.error(f"[{document_id}] Failed: {section_name}: {e}")
+            logger.error(f"RESPONSE: {response[:500] if response else '<empty>'}")
             raise
 
-    def _build_doc_classification_prompt(
+    # ------------------------------------------------------------------
+    # Document classification (entirely config-driven)
+    # ------------------------------------------------------------------
+
+    def _needs_classification(self, section_type: str) -> bool:
+        """Check if this section type requires document classification."""
+        if not self._cls_config.get("enabled", False):
+            return False
+        return section_type in self._cls_config.get("applies_to", [])
+
+    def _classify_document(self, images_b64: List[str], section_info: Dict, document_id: str) -> str:
+        """Run document classification using the config-defined prompt."""
+        types_cfg = self._cls_config.get("types", {})
+        default_type = self._cls_config.get("default_type", "Unknown")
+
+        # Build type hints from config
+        type_hints_parts = []
+        for type_name, type_cfg in types_cfg.items():
+            type_hints_parts.append(f'- "{type_name}": {type_cfg.get("detection_hints", "")}')
+        type_hints = "\n".join(type_hints_parts)
+        type_names = " / ".join(types_cfg.keys())
+
+        # Render the classification prompt template
+        template = join_prompt(self._cls_config.get("prompt_template", []))
+        prompt = render_prompt(
+            template,
+            section_name=section_info["section_name"],
+            start_page=section_info["start_page"],
+            end_page=section_info["end_page"],
+            type_hints=type_hints,
+            type_names=type_names,
+        )
+
+        response = invoke_multimodal(images=images_b64, prompt=prompt, max_tokens=MODEL_MAX_TOKENS_EXTRACTION)
+
+        # Match response to a configured type by keyword
+        response_lower = response.lower().strip()
+        for type_name, type_cfg in types_cfg.items():
+            keyword = type_cfg.get("match_keyword", type_name.lower())
+            if keyword in response_lower:
+                logger.info(f"[{document_id}] Classified as: {type_name}")
+                return type_name
+
+        logger.info(f"[{document_id}] Classification unclear, using default: {default_type}")
+        return default_type
+
+    def _get_type_guidance(self, doc_type: str) -> str:
+        """Get the extraction guidance for a classified document type."""
+        types_cfg = self._cls_config.get("types", {})
+        type_cfg = types_cfg.get(doc_type, {})
+        guidance = type_cfg.get("extraction_guidance", [])
+        return join_prompt(guidance) if guidance else ""
+
+    # ------------------------------------------------------------------
+    # Prompt building (fully config-driven)
+    # ------------------------------------------------------------------
+
+    def _build_prompt(
         self,
         section_info: Dict,
+        next_section_name: str,
+        image_info: str,
+        doc_type_guidance: str,
     ) -> str:
-        """Build doc classification prompt with image descriptions."""
-        
-        return f"""You are an expert information extraction assistant specialized in processing technical documents including Work Instructions and Preventative Maintenance Instructions.
-        Your task is to classify a document correctly according to the provided TASK ACTIVITIES section.
-
-        Section: {section_info['section_name']} ({section_info['section_type']})
-        Pages: {section_info['start_page']} to {section_info['end_page']}
-
-
-        FIRST STEP (DOCUMENT CLASSIFICATION):
-            The TASK ACTIVITIES are from either a Preventative Maintenance Instructions and PRT Work Instructions (PMI) or Work Instructions (WIN) document.
-            Carefully look at the Pages: {section_info['start_page']} to {section_info['end_page']} then decide document type: either "WIN" or "PMI" based on the following RULES:
-
-            RULES:
-            "WIN": For Work Instructions, pay special attention to:
-                    - Look for "Tasks to be Done Under Running Conditions" or "Tasks to be done under Isolation"
-            "PMI": For Preventative Maintenance Instructions and PRT Work Instructions, pay special attention to:
-                    - Look for "Preventive Task Description" in headers/tables or document is about maintainable items
-                    - Look for TEXT similar to "The following Tasks are applicable to all the maintenance items listed below"
-            "Unknow": If you can not see either "WIN" or "PMI" indicators. 
-
-        SECOND STEP:
-        Once decided Return either "PMI", "WIN", or "Unknown". Do not generate any extra text.
-        """
-    
-    def _build_task_activities_prompt(
-        self,
-        section_info: Dict,
-        image_mapping_data: List[Dict] = None,  # CHANGED
-        image_prompt_text: str = "",             # NEW
-        doc_type: str = "PMI"
-    ) -> str:
-        """Build task activities prompt with image descriptions."""
-        
-        # Use the pre-formatted image prompt text
-        image_info = ""
-        if image_prompt_text:
-            image_info = image_prompt_text
-        elif image_mapping_data:
-            image_info = _format_image_mapping_fallback(image_mapping_data)
-        
-        # Add specific guidance for task activities
-        if image_info:
-            image_info += """
-            
-    TASK ACTIVITIES IMAGE PLACEMENT:
-    ================================
-    For task/activity tables with multiple columns:
-
-    1. STEP DESCRIPTION column images:
-    - Go to step_description field
-    - Include text from inside icons
-
-    2. PHOTO/DIAGRAM column images:
-    - Go to photo_diagram field
-    - Match by position on page relative to the step
-
-    3. NOTES column images:
-    - Go to notes field
-
-    4. MATCHING PROCESS:
-    a. Identify which TABLE ROW the image is in
-    b. Identify which TABLE COLUMN the image is in
-    c. Find image in list by PAGE + approximate Y-position
-    d. Copy exact path to appropriate field
-    e. For multiple images in same ROW and COLUMN populate them as a list
-    """
-                
-        prompt =  f"""Extract all information from this TASK ACTIVITIES section into JSON format using a FLAT structure.
-
-            Section: {section_info['section_name']} ({section_info['section_type']})
-            Pages: {section_info['start_page']} to {section_info['end_page']}
-            {image_info}
-
-            REQUIRED JSON STRUCTURE (FLAT):
-        [
-        {{
-            "equipment_asset": {{"orig_text": "Equipment name", "text": "Equipment name"}},
-            "sequence_no": {{"orig_text": "1", "text": "1"}},
-            "sequence_name": {{"orig_text": "JOB PREPARATION", "text": "JOB PREPARATION"}},
-            "maintainable_item": [],  // Usually empty unless special table present
-            "lmi": [{{"orig_text": "LMI info", "text": "LMI info"}}],
-            "step_no": {{"orig_text": "1.1", "orig_image": "", "text": "1.1", "image": ""}},
-            "step_description": [{{"orig_text": "Step instructions", "orig_image": "", "text": "Step instructions", "image": ""}}],
-            "photo_diagram": [{{"orig_text": "", "orig_image": "path", "text": "", "image": "path"}}],
-            "notes": [{{"orig_text": "Note text", "orig_image": "", "text": "Note text", "image": ""}}],
-            "acceptable_limit": [{{"orig_text": "45 Nm", "orig_image": "", "text": "45 Nm", "image": ""}}],
-            "question": [{{"orig_text": "Is it ok?", "orig_image": "", "text": "Is it ok?", "image": ""}}],
-            "corrective_action": [{{"orig_text": "Fix it", "orig_image": "", "text": "Fix it", "image": ""}}],
-            "execution_condition": {{"orig_text": "", "text": ""}},
-            "other_content": [{{"orig_text": "", "orig_image": "", "text": "", "image": ""}}]
-        }}
-        ]
-
-            IMPORTANT - FLAT STRUCTURE:
-            Task activities use a FLAT structure where EACH STEP is a separate object in the array.
-            Sequence information must be REPEATED for each step belonging to that sequence.
-        """
-    
-        if doc_type == "WIN":
-            prompt += f"""
-            FIRST STEP (SEQUENCE EXTRACTION or POPULATION):
-                1. FIND SEQUENCES:
-                - The squences are [BOLD] titles sometimes numerated (e.g., "1 JOB PREPARATION", "2 OPERATION", "G. HOUSEKEEPING") and sometimes NOT (e.g. "Pneumatic Maintenance Unit CV203"), these are sequence dividers.
-                - If the sequences are numerated, the steps are likely 1.1, 1.2 ... or a., b., ...
-                - If the sequences are not numerated, then the steps are likely 1., 2., ... or a., b., ... 
-                - Sequences are usually in a table with columns "No.", "Task Steps", "Photo or Diagram" and "Notes".
-                - If you see "HANDOVER TASKS", "HOUSEKEEPING TASKS" or "HOUSE KEEPING" black banner, these are sequence and the items under them are steps.
-                
-                2. CRITICAL: LOOK FOR SUB-HEADINGS with black background but not in a table (If available):
-                - The sub-headings are about running or execution conditions e.g., "Tasks to be done under Isolation", "Pre-Isolation Tasks", "Post-Isolation Tasks", "De-Isolation Tasks".
-                - When you encounter sub-headings, infer the execution_condition for all sequences under them until you reach the next sub-heading.
-                - "Tasks to be done under Isolation" → execution_condition: {{"orig_text": "Isolation", "text": "Isolation"}}
-                - "Pre-Isolation Tasks" → execution_condition: {{"orig_text": "Pre-Isolation", "text": "Pre-Isolation"}}
-                - "Post-Isolation Tasks" → execution_condition: {{"orig_text": "Post-Isolation", "text": "Post-Isolation"}}
-                - "De-Isolation Tasks" → execution_condition: {{"orig_text": "De-Isolation", "text": "De-Isolation"}}
-                - Normal conditions → execution_condition: {{"orig_text": "", "text": ""}}
-                
-                    2.1. SUB-ITEMS under sub-headings (e.g., a., b., c., or 1a, 1b, 1c):
-                    - These usually start with a., b., c., or 1a, 1b, 1c
-                    - These usually come right after the sub-headings and before the next sequence (Do not mistake them with NEXT SEQUENCE, think carefully)
-                    - These are steps to be assgined to the sub-headings.
-                    - If they are not available then the steps are EMPTY (Example 3 below)
-                    CRITICAL: SUB-ITEMS DO NOT START with 1., 2., 3., if you see these numbering they are NEXT Sequence
-
-                SCENARIO 1 (CRITICAL):
-                IF there is a Sequence with number like 1., 2., 3., right BEFORE the sub-heading. In this case the sub-heading is NOT a sequence and it only defines the running conditions for the next sequences.
-                If there is any SUB-ITEMS right after this sub-heading, concat them to the previous numbered sequence.
-
-                Example: (SUB HEADING is not a sequence):
-                    [BOLD] 1. First TITLE [FIRST BOUNDARY]
-                    [BLACK BACKGROUND] "Task to be done under Isolation" --> [INFER execution_condition] [NOT A SEQUENCE]
-                    a. step --> [SUB-ITEM] [concat it to the squence 1 steps]
-                    b. step --> [SUB-ITEM] [concat it to the squence 1 steps]
-                    1.1 Step one
-                    1.2 Step two
-                    [BOLD] 2. Second TITLE --> [SECOND BOUNDARY]
-                    2.1 Step one
-                    2.2 Step two
-                    [BOLD] 3. Third TITLE --> [THIRD BOUNDARY]
-                    3.1 Step one
-                    3.2 Step two
-
-                    Result:
-                    - First sequence: sequence_name: "First Title" and sequence_no: "1", steps a., b., 1.1, 1.2, execution_condition: "Isolation"
-                    - Second sequence: sequence_name: "Second TITLE" and sequence_no: "2", steps 2.1, 2.2, execution_condition: "Isolation"
-                    - Third sequence: sequence_name: "Third TITLE" and sequence_no: "3", steps 3.1, 3.2, execution_condition: "Isolation"
-                
-                SCENARIO 2:
-                Other than scenario 1, the sub-headings are sequences with empty sequence_no and they determine execution_condition in the next available sequences.
-
-                Example 1 (Numerated Sequences):
-                    [BLACK BACKGROUND] "Task to be done under Isolation" --> [FIRST BOUNDARY, INFER execution_condition]
-                    a. step --> [SUB-ITEM]
-                    b. step --> [SUB-ITEM]
-                    [BOLD] 1. Second TITLE --> [SECOND BOUNDARY]
-                    1.1 Step one
-                    1.2 Step two
-                    [BOLD] 2. Third TITLE --> [THIRD BOUNDARY]
-                    1.1 Step one
-                    1.2 Step two
-
-                    Result:
-                    - First sequence: sequence_name: "Task to be done under Isolation" and sequence_no: "", steps a., b., execution_condition: "Isolation"
-                    - Second sequence: sequence_name: "Second TITLE" and sequence_no: "1", steps 1.1, 1.2, execution_condition: "Isolation"
-                    - Third sequence: sequence_name: "Third TITLE" and sequence_no: "2", steps 2.1, 2.2, execution_condition: "Isolation"
-
-                Example 2 (NOT Numerated Sequences):
-                    [BLACK BACKGROUND] "Pre-Isolation Tasks (or similar sentence)" --> [FIRST BOUNDARY, INFER execution_condition]
-                    a. step --> [SUB-ITEM]
-                    b. step --> [SUB-ITEM]
-                    [BOLD] Second TITLE --> [SECOND BOUNDARY]
-                    1 Step one
-                    2 Step two
-                    [BOLD] Third TITLE --> [THIRD BOUNDARY]
-                    3 Step one
-                    4 Step two
-
-                    Result:
-                    - First sequence: sequence_name: "Pre-Isolation Tasks (or similar sentence)" and sequence_no: "", steps a., b., execution_condition: "Pre-Isolation"
-                    - Second sequence: sequence_name: "Second TITLE" and sequence_no: "", steps 1.1, 1.2, execution_condition: "Pre-Isolation"
-                    - Third sequence: sequence_name: "Third TITLE" and sequence_no: "", steps 2.1, 2.2, execution_condition: "Pre-Isolation"
-
-                Example 3 (SUB ITEMS sre not available):
-                    [BLACK BACKGROUND] "Task to be done under Isolation" --> [FIRST BOUNDARY, INFER execution_condition]
-                    [BOLD] 1. Second TITLE --> [SECOND BOUNDARY]
-                    1.1 Step one
-                    1.2 Step two
-                    [BOLD] 2. Third TITLE --> [THIRD BOUNDARY]
-                    1.1 Step one
-                    1.2 Step two
-
-                    Result:
-                    - First sequence: sequence_name: "Task to be done under Isolation" and sequence_no: "", steps are empty fields, execution_condition: "Isolation"
-                    - Second sequence: sequence_name: "Second TITLE" and sequence_no: "1", steps 1.1, 1.2, execution_condition: "Isolation"
-                    - Third sequence: sequence_name: "Third TITLE" and sequence_no: "2", steps 2.1, 2.2, execution_condition: "Isolation"
-
-                3. If you see "Pre-Task Activities" title then create a sequence with sequence_name: "Pre-Task Activities" where all other fields MUST be empty.
-                    Example:
-                    [BOLD] PRE-TASK ACTIVITIES --> [FIRST BOUNDARY]
-                    [BOLD] Title --> [SECOND BOUNDARY]
-                    1. Step one
-                    2. Step two
-
-                    Result:
-                    - First sequence: sequence_name: "PRE-TASK ACTIVITIES" and sequence_no is empty, NO steps (empty step fields), No other fields
-                    - Second sequence: sequence_name: "Title" and sequence_no is empty, Steps 1 and 2 (ONLY in this sequence)
-
-                4. Count how many sequences you will create before starting extraction
-                
-                """
-        else: #PMI
-            prompt += f"""
-            FIRST STEP (SEQUENCE EXTRACTION or POPULATION):
-            ⚠️ CRITICAL MAINTAINABLE ITEMS RULES - PREVENTIVE TASK DESCRIPTION SCENARIOS:
-            When you see "Preventive Task Description" in headers/tables or document is about maintainable items:
-            1. Scan for all "The following Tasks are applicable to all the maintenance items listed below" and [BOLD] titles, these are sequence dividers.
-             1.1 ⚠️ CRITICAL: make sure the maintainable items are reported for the all steps of the sequence.
-            2. If found, there are the following two scenarios:
-            - SCENARIO 1: You see "The following Tasks are applicable to all the maintenance items listed below" alone without a [BOLD] title right AFTER it then it is a sequence
-            without both sequence_no and sequence_name.
-                Example 1:
-                    [BOLD] Equipment Name --> [FIRST BOUNDARY]
-                    [No steps here]
-                    "The following Tasks..." --> [SECOND BOUNDARY]
-                    1. Step one
-                    2. Step two
-                    [Table with maintainable items]
-                    
-                    Result:
-                    - First sequence: sequence_name: "Equipment Name" and sequence_no is empty, NO steps (empty step fields), maintainable item: "Equipment Name"
-                    - Second sequence: Steps 1 and 2 (ONLY in this sequence) and [Table with maintainable items]
-
-                Example 2:
-                    "The following Tasks..." --> [FIRST BOUNDARY]
-                    [Table with maintainable items 1]
-                    1. Step one
-                    2. Step two
-                    [BOLD] Equipment Name --> [SECOND BOUNDARY]
-                    [No steps here]
-                    [Table with maintainable items 2]
-                    
-                    Result:
-                    - First sequence: both sequence_name and sequence_no are empty, Steps 1 and 2 (ONLY in this sequence) and [Table with maintainable items 1]
-                    - Second sequence: sequence_name: "Equipment Name" and sequence_no is empty, NO steps (empty step fields) and [Table with maintainable items 2]
-
-                - SCENARIO 2: You see "The following Tasks are applicable to all the maintenance items listed below" with a [BOLD] title right AFTER it then it is a sequence
-            with a sequence_name as the [BOLD] title.
-                Example 1:
-                    [BOLD] Equipment Name --> [FIRST BOUNDARY]
-                    [No steps here]
-                    "The following Tasks..." --> [SECOND BOUNDARY]
-                    [BOLD] Equipment Name 2
-                    [Table with maintainable items 1]
-                    1. Step one
-                    2. Step two
-                    "The following Tasks..." --> [THIRD BOUNDARY]
-                    3. Step one
-                    4. Step two
-                    [Table with maintainable items 2]
-                    "The following Tasks..." --> [FORTH BOUNDARY]
-                    5. Step one
-                    6. Step two
-                    
-                    Result:
-                    - First sequence: sequence_name: "Equipment Name" and sequence_no is empty, NO steps (empty step fields), maintainable item: "Equipment Name"
-                    - Second sequence: sequence_name: "Equipment Name 2" and sequence_no is empty, Steps 1 and 2 (ONLY in this sequence) and [Table with maintainable items 1]
-                    - Third sequence: both sequence_name and sequence_no are empty, Steps 3 and 4 (ONLY in this sequence) and [Table with maintainable items 2]
-                    - Forth sequence: both sequence_name and sequence_no are empty, Steps 5 and 6 (ONLY in this sequence) and NO maintainable items
-
-                2.1 ⚠️ CRITICAL: Define the sequence boundary, then Report the maintainable items (if found within the sequence boundary) ONLY for the steps belong to the sequence.
-                2.2 A sequnce might spread between pages therefore carefully define the sequence boundary (think if the maintainable items are actually belong to the sequence)
-            3. If "Pre-Task Activities" title found then create a sequence with sequence_name: "Pre-Task Activities" and all other sequence fields MUST be empty.
-                    Example:
-                    [BOLD] PRE-TASK ACTIVITIES --> [FIRST BOUNDARY]
-                    [BOLD] Title --> [SECOND BOUNDARY]
-                    1. Step one
-                    2. Step two
-
-                    Result:
-                    - First sequence: sequence_name: "PRE-TASK ACTIVITIES" and sequence_no is empty, NO steps (empty step fields), No other fields
-                    - Second sequence: sequence_name: "Title" and sequence_no is empty, Steps 1 and 2 (ONLY in this sequence)
-
-            4. If "Post-Task Activities" title found then create a sequence with sequence_name: "Post-Task Activities" and all other sequence fields MUST be empty.
-                    Example:
-                    [BOLD] POST-TASK ACTIVITIES --> [FIRST BOUNDARY]
-                    [BOLD] Title --> [SECOND BOUNDARY]
-                    1. Step one
-                    2. Step two
-
-                    Result:
-                    - First sequence: sequence_name: "POST-TASK ACTIVITIES" and sequence_no is empty, NO steps (empty step fields), No other fields
-                    - Second sequence: sequence_name: "Title" and sequence_no is empty, Steps 1 and 2 (ONLY in this sequence)
-
-            5. If "Execution Condition" title found then the "execution_condition" of all the sequences after this should be infered and populated until it reaches another execution condition.
-                    Example:
-                    [BOLD] Execution Condition     Running --> [FIRST BOUNDARY]
-                    a. step
-                    [BOLD] Title --> [SECOND BOUNDARY]
-                    1. Step one
-                    2. Step two
-
-                    Result:
-                    - First sequence: sequence_name: "Running" and sequence_no is empty, step a. (only in this sequence), execution_condition: "Running"
-                    - Second sequence: sequence_name: "Title" and sequence_no is empty, Steps 1 and 2 (ONLY in this sequence), execution_condition: "Running"
-
-            6. If the sequence has sequence_name but not maintainable items then DUPLICATE sequence_name to maintainable_item like example below and above:
-            
-            Example - CORRECT extraction:
-            Document structure:
-            [BOLD] TLO Hydraulic Power Pack
-            [Diagram]
-            "The following Tasks are applicable to all the maintenance items listed below"
-            [Table with maintainable items]
-            [Steps]
-            
-            Result for FIRST sequence (ends at "The following Tasks..."):
-            {{
-            "sequence_no": {{"orig_text": "", "text": ""}},
-            "sequence_name": {{"orig_text": "TLO Hydraulic Power Pack", "text": "TLO Hydraulic Power Pack"}},
-            "maintainable_item": [
-                {{"orig_text": "TLO Hydraulic Power Pack", "text": "TLO Hydraulic Power Pack"}}  // DUPLICATED - no table with maintainable items
-            ],
-            "step_no": {{"orig_text": "", "text": "", "orig_image": "", "image": ""}},  // EMPTY - no steps
-            "step_description": [],  // EMPTY - no steps
-            "photo_diagram": [],  // Diagram should go here if needed
-            "notes": [],
-            "acceptable_limit": [],  // EMPTY 
-            "question": [],
-            "corrective_action": [],
-            "execution_condition": {{"orig_text": "", "text": ""}},
-            "other_content": []
-            }}
-            
-            Example - CORRECT extraction:
-            Continuing from above example, SECOND sequence (starts after "The following Tasks..."):
-            {{
-            "sequence_no": {{"orig_text": "", "text": ""}},
-            "sequence_name": {{"orig_text": "", "text": ""}},  // EMPTY - no bold title
-            "maintainable_item": [
-                {{"orig_text": "Hydraulic Pump PS01 Suction Valve Open Limit Switch ZS1001", "text": "Hydraulic Pump PS01 Suction Valve Open Limit Switch ZS1001"}},
-                {{"orig_text": "Hydraulic Pump PS01 Inlet Strainer Blocked Pressure Switch PSH1002", "text": "Hydraulic Pump PS01 Inlet Strainer Blocked Pressure Switch PSH1002"}},
-                // ... all other items from the table
-            ],
-            "step_no": {{"orig_text": "1", "text": "1"}},
-            "step_description": [{{"orig_text": "Visually inspect condition of field device", "text": "Visually inspect condition of field device"}}],
-            // ... steps
-            }}
-
-            7. NEVER mix content, including maintainable items, across these boundaries
-            8. Count how many sequences you will create before starting extraction
-            
-            """
-        # General
-        prompt += f"""
-        -----------------------------------------------
-        CRITIAL GENERAL RULES:
-        -----------------------------------------------
-        ⚠️ CRITICAL PARAGRAPH RULE:
-        - If you see the text has continued to the next paragraph (or new line) then create a new text field object
-        Example:
-        [Paragraph 1]
-
-        [Paragraph 2]
-        Result:
-        [
-            {{"orig_text": "Paragraph 1", "text": "Paragraph 1"}},
-            {{"orig_text": "Paragraph 2", "text": "Paragraph 2"}}
-        ]
-
-        ⚠️ CRITICAL NEW LINE RULE:
-        - If you see the text has continued to the next line then create a new text field object
-        Example:
-        [TEXT 1]
-        [TEXT 2]
-        Result:
-        [
-            {{"orig_text": "TEXT 1", "text": "TEXT 1"}},
-            {{"orig_text": "TEXT 2", "text": "TEXT 2"}}
-        ]
-
-        ⚠️ CRITICAL FIELD DUPLICATION RULE:
-        ALL fields with "orig_" prefix must have the SAME value as their corresponding field:
-        - orig_text = text (exact same value)
-        - orig_image = image (exact same value)
-        - orig_seq = seq (exact same value)
-
-        ⚠️ CRITICAL SEQUENCE ASSIGNMET:
-        - In flat structure: If sequence has 2 steps, create 2 objects for that sequence with duplicated fields
-        - If sequence has 0 steps, create 1 object with empty step fields
-        - CRITIAL: DO NOT miss the sequence nummber if available next to the sequence name.
-
-        ⚠️ CRITICAL STEP ASSIGNMENT: 
-        - Steps belong ONLY to the sequence where they physically appear in the document
-        - If no steps exist between the current sequence and next sequence..." → the current sequence has NO steps
-        - Each step appears in EXACTLY ONE sequence
-
-        ⚠️ CRITICAL STEP EXTRACTION:
-        - If you DO NOT see boundary line between "TASK STEPS" and "NOTES" columns, then put the EXTRACTED text in the "step_description" NOT the "notes".
-        - When extracting step of a sequence, if the step description continues onto the next page, it is treated as part of the same step number. 
-            Example: 
-            1. TITLE ---> Sequence
-            1.1 Step ---> STEP 1.1 Boundary
-            Step Description
-
-            [Page Break]
-
-            Step Description continued --> [concat it to the step 1.1 description]
-
-            1.2 Step ---> STEP 1.2 Boundary
-            Step 1.2 description
-
-        ⚠️ CRITICAL GENERAL RULE:
-        - Do not populate "equipment_asset" field in the task activities.
-
-        --------------------------
-        CRITICAL EXTRACTION RULES:
-        --------------------------
-        1. FIELD VALUE DUPLICATION:
-        - ALWAYS duplicate values: orig_text = text, orig_image = image
-        - Never leave one empty if the other has value
-
-        2. EMPTY FIELD HANDLING:
-        - If both text and image are empty → field can be empty array [] or empty dict {{}}
-        - Empty arrays: [] instead of [{{"orig_text": "", "text": ""}}]
-        - Empty dicts: {{}} instead of {{"orig_text": "", "text": ""}}
-
-        3. IMAGE PLACEMENT BY COLUMN:
-        - Map images to fields based on table column
-        - If you see multiple images in one field then populated them in the list, do not miss any image.
-
-        4. TEXT EXTRACTION:
-        - Extract TEXT from icons, don't describe them
-        - Extract exact text, don't paraphrase or generate random words
-        - Use ONLY ASCII characters (0-127) - replace unicode (- → --, - → -, • → *) with ASCII equivalents
-
-        -----------------
-        EXTRACTION STEPS:
-        -----------------
-        1. Look at ALL pages ({section_info['start_page']} to {section_info['end_page']}):
-        """
-        if doc_type == "WIN":
-            prompt += f"""
-            1.1. For this document:
-            - Follow standard numbering (1, 1.1, 1.2,.. or 1., 2, 3...)
-            - Check for special patterns (sub-headings, sub-items and sequences)
-            - Sub-headings are separate Sequence with sub items as steps (if available) (Scenario 2) UNLESS there is a Numbered SEQUENCE right before the sub-heading (Scenario 1).
-                - Carefully consider both Scenario 1 and 2 defined above. 
-            - Set execution_condition based on sub-heading context for all next sequences until next sub-heading 
-            """
-        else:
-            prompt += f"""
-            1.1. For this document:
-            - Look for "Preventive Task Description" in headers/tables
-            - Look for maintainable items patterns
-            - Look for bold equipment/component names
-
-                1.1.1. CRITICAL CHECK for "The following Tasks are applicable to all the maintenance items listed below" and [BOLD] titles as sequence dividers:
-                - IMMEDIATELY plan to create MULTIPLE sequences
-                - DO NOT mix content across these boundaries
-
-                1.1.2. For maintainable items document:
-                PATTERN: Bold title → Content → "The following Tasks..." → Table → Steps
-                RESULT: TWO sequences
-                - Sequence 1: Bold title, duplicated maintainable_item, any steps BEFORE divider
-                - Sequence 2: Empty name, table items, steps AFTER divider
-
-                1.1.3. If maintainable items document detected, follow SCENARIO 1 & 2 in "PMI" documents rules:
-                - Bold titles = sequences with empty sequence_no
-                - Extract steps under each sequence UNTIL hitting a boundary
-                - "The following Tasks..." is a HARD BOUNDARY - end current sequence
-                - If maintainable table found BEFORE next sequence → populate maintainable_item
-                - If no table BEFORE next sequence but have sequence_name → duplicate to maintainable_item
-                - After "The following Tasks..." → start NEW sequence with its own rules
-                - Content AFTER "The following Tasks..." NEVER belongs to previous sequences
-
-            1.2. "Pre" or "Post" activities (if available) MUST be extracted
-            """
-        prompt += f""" 
-        2. Make sure:
-        - Map content from each column to appropriate field
-        - Duplicate all values to orig_ fields
-        - Carefully check images and make sure images are populated in the correct fields in the JSON
-        - Populate all the images in the fields as list
-        
-        3. Clean up empty fields (remove if both text and image are empty)
-
-        Return the complete JSON array now (start with [, no markdown):
-        """
-        return prompt
-    
-    def _build_extraction_prompt(
-        self, 
-        section_info: Dict, 
-        next_section_name: str = None, 
-        image_mapping_data: List[Dict] = None,  # CHANGED: Now list of mappings
-        image_prompt_text: str = ""              # NEW: Pre-formatted prompt text
-    ) -> str:
-        """Build extraction prompt with image descriptions."""
-        
-        # Use the pre-formatted image prompt text if available
-        image_info = ""
-        if image_prompt_text:
-            image_info = image_prompt_text
-        elif image_mapping_data:
-            # Fallback: format the mapping data ourselves
-            image_info = _format_image_mapping_fallback(image_mapping_data)
-        
-        return f"""Extract all information from this document section into JSON format.
-
-    Section: {section_info['section_name']} ({section_info['section_type']})
-    Pages: {section_info['start_page']} to {section_info['end_page']}
-    {image_info}
-
-    REQUIRED JSON SCHEMA:
-    {json.dumps(self.section_schema, indent=2)}
-
-    CRITICAL DOCUPORTER FORMAT RULES:
-    1. FIELD DUPLICATION:
-    - Every "text" field has a corresponding "orig_text" field with SAME value
-    - Every "image" field has a corresponding "orig_image" field with SAME value
-    - Every "seq" field has a corresponding "orig_seq" field with SAME value
-    - NEVER leave one empty if the other has value
-
-    2. SCHEMA PRESERVATION:
-    - Include EVERY KEY shown in the schema
-    - NEVER add, remove, or rename keys
-    - Preserve the EXACT structure
-
-    3. EMPTY FIELD HANDLING:
-    - If both text and image are empty -> return empty array [] or empty dict {{}}
-    - [{{"orig_text": "", "text": ""}}] -> []
-    - {{"orig_text": "", "text": ""}} -> {{}}
-    - But if either has value, keep the full structure
-        Exception for "material_risks_and_controls" section:
-        If all children fields are empty then remove children fields and keep only the parent field as empty []
-        Example:
-            "material_risks_and_controls": [{{"risk": {{}},"risk_description": {{}},"critical_controls": []}}]
-
-        Result:
-            "material_risks_and_controls": []
-
-    4. IMAGE PLACEMENT BY POSITION:
-    - FIRST: Identify the PAGE where you see the image
-    - SECOND: Identify the POSITION on the page (top/middle/bottom, left/center/right)
-    - THIRD: Find the matching entry in the image list by page + position
-    - FOURTH: Copy the EXACT path from that entry
-    - If multiple images match, use Y% to distinguish (lower Y% = higher on page)
-
-    5. ⚠️ CRITICAL PARAGRAPH RULE:
-        - If you see the text has continued to the next paragraph (or new line) then create a new text field object
-        Example:
-        [Paragraph 1]
-        [Paragraph 2]
-
-        Result:
-        [
-            {{"orig_text": "Paragraph 1", "text": "Paragraph 1"}},
-            {{"orig_text": "Paragraph 2", "text": "Paragraph 2"}}
-        ]
-
-    DEFAULT VALUES FOR FIELDS WITH CONTENT:
-    - String fields with value: {{"orig_text": "value", "text": "value"}}
-    - Image fields with path: {{"orig_image": "path", "image": "path"}}
-    - Empty fields: {{}} or []
-        Exceptions:
-        - "step_no": {{}} → "step_no": {{"orig_text": "", "text": ""}}
-        - "equipment_asset": {{}} → "equipment_asset": {{"orig_text": "", "text": ""}}
-        - "risk_description": {{}} → "risk_description": {{"orig_text": "", "text": ""}}
-
-    CRITICAL IMAGE PLACEMENT RULES:
-    - If document has a table structure, place images in fields matching their table columns
-    - Don't put all images in one field - distribute based on column context
-    - Extract TEXT FROM INSIDE icons/images, do NOT describe them
-    - Put "Risk Description" as "text" for the image in "Risk" column 
-    - Multiple images in same column = multiple list entries in that field
-
-    CRITICAL EXTRACTION RULES:
-    - Extract ALL text EXACTLY as written below the section "{section_info['section_name']}" but before next section: "{next_section_name}"
-    ⚠️ CRITICAL SECTION EXTRACTION (including tables):
-        Look at ALL pages ({section_info['start_page']} to {section_info['end_page']})
-        You might see several section name: "{section_info['section_name']}" including table titles
-        - When extracting section, if the section or table continues onto the next page, it is treated as part of the same section or table. 
-            Example: 
-            [BOLD TITLE] "{section_info['section_name']}"  ---> Section / Table
-            [TEXT 1]
-            [Page Break]
-            [BOLD TITLE] "{section_info['section_name']}"  (if found) 
-            [TEXT 2] ---> [concat it to the TEXT 1 above]
-            [BOLD TITLE] "{next_section_name}" ---> Next Section
-    - Do not paraphrase or reword
-    - Copy text word-for-word from the section
-    - Preserve original spelling, capitalization, and punctuation
-    - Use ONLY ASCII characters (0-127) - replace unicode (- → --, - → -, • → *) with ASCII equivalents
-    - For images: Match by PAGE and POSITION, then copy EXACT path from the list
-    - Place images in the field that matches their TABLE COLUMN position
-    ⚠️ CRITICAL PARAGRAPH RULE:
-        - If you see the text has continued to the next paragraph (or new line) then create a new text field object
-        Example:
-        [Paragraph 1]
-
-        [Paragraph 2]
-        Result:
-        [
-            {{"orig_text": "Paragraph 1", "text": "Paragraph 1"}},
-            {{"orig_text": "Paragraph 2", "text": "Paragraph 2"}}
-        ]
-    
-
-    CRITICAL:
-    - MAKE SURE to extract all information about the SAFETY from "SAFETY" section (including numerated items)
-    - MAKE SURE all images in the section "ATTACHED PICTURES, DRAWINGS OR DIAGRAMS" are populated in the JSON
-        
-    EXTRACTION STEPS:
-    1. Look at ALL pages shown ({section_info['start_page']} to {section_info['end_page']})
-    2. Identify the table structure and column headers (if any)
-    3. Extract all text from section: {section_info['section_name']} until next section: {next_section_name}
-    4. If the section/table: "{section_info['section_name']}" appears in multiple pages make sure extract all the content (Do not extract section partially)
-    4. For each piece of content:
-       - Extract text EXACTLY as it appears
-       - Duplicate to orig_text field
-       - Map images to appropriate fields by column
-       - Duplicate image paths to orig_image fields
-    5. Structure according to the schema
-    6. Clean up empty fields (if both text and image empty, use [] or {{}})
-
-    Return the complete JSON object now (start with {{ or [, no markdown):
-    """
-
-    
-    def _parse_extraction_response(self, response: str) -> Union[Dict, List]:
-        """Parse LLM response to extract section data."""
-        # Clean the response
+        section_type = section_info["section_type"]
+
+        # 1. System preamble (from config)
+        preamble = render_prompt(
+            get_extraction_preamble(),
+            schema=json.dumps(self.section_schema, indent=2),
+        )
+
+        # 2. Section-specific or default extraction template (from config)
+        body_template = get_section_extraction_prompt(section_type)
+
+        body = render_prompt(
+            body_template,
+            section_name=section_info["section_name"],
+            section_type=section_type,
+            start_page=section_info["start_page"],
+            end_page=section_info["end_page"],
+            next_section_name=next_section_name,
+            image_info=image_info or "",
+            schema=json.dumps(self.section_schema, indent=2),
+            doc_type_guidance=doc_type_guidance,
+        )
+
+        # 3. General rules (from config)
+        rules = get_extraction_general_rules()
+
+        return f"{preamble}\n\n{body}\n\n{rules}"
+
+    # ------------------------------------------------------------------
+    # Parse
+    # ------------------------------------------------------------------
+
+    def _parse(self, response: str) -> Union[Dict, List]:
         response = clean_json_response(response)
-        
         try:
-            parsed = json.loads(response)
-            
-            # If we got an array but expected an object structure, wrap it
-            # This happens for array-type sections like material_risks_and_controls
-            if isinstance(parsed, list):
-                # The array IS the section content, return it as-is
-                # The calling code will handle wrapping if needed
-                return parsed
-            
-            return parsed
-            
+            return json.loads(response)
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse extraction response: {e}")
+            logger.error(f"JSON parse failed: {e}")
             raise
 
-    def _validate_and_fix_schema(self, extracted_json: Any, expected_schema: Any) -> Any:
-        """
-        Validate extracted JSON against schema and add missing keys.
-        This is a safety net in case the LLM still omits keys.
-        """
-        if isinstance(expected_schema, list) and len(expected_schema) > 0:
-            # Schema is an array, get the template item
-            template = expected_schema[0]
-            
-            if isinstance(extracted_json, list):
-                # Fix each item in the array
-                fixed_items = []
-                for item in extracted_json:
-                    if isinstance(item, dict) and isinstance(template, dict):
-                        fixed_item = self._fix_dict_schema(item, template)
-                        fixed_items.append(fixed_item)
-                    else:
-                        fixed_items.append(item)
-                return fixed_items
-            else:
-                # Expected array but got something else, return with template structure
-                return []
-        
-        elif isinstance(expected_schema, dict) and isinstance(extracted_json, dict):
-            return self._fix_dict_schema(extracted_json, expected_schema)
-        
-        return extracted_json
 
-    def _fix_dict_schema(self, data: Dict, template: Dict) -> Dict:
-        """
-        Ensure all keys from template exist in data.
-        """
-        fixed = {}
-        
-        for key, template_value in template.items():
-            if key in data:
-                # Key exists, recursively fix if needed
-                if isinstance(template_value, dict) and isinstance(data[key], dict):
-                    fixed[key] = self._fix_dict_schema(data[key], template_value)
-                elif isinstance(template_value, list) and len(template_value) > 0:
-                    if isinstance(data[key], list):
-                        # Fix each item in the list
-                        fixed_items = []
-                        item_template = template_value[0]
-                        for item in data[key]:
-                            if isinstance(item, dict) and isinstance(item_template, dict):
-                                fixed_items.append(self._fix_dict_schema(item, item_template))
-                            else:
-                                fixed_items.append(item)
-                        fixed[key] = fixed_items
-                    else:
-                        fixed[key] = []  # Empty array if wrong type
-                else:
-                    fixed[key] = data[key]
-            else:
-                # Key missing, add with empty value based on template
-                if isinstance(template_value, dict):
-                    # For dict, recursively create empty structure
-                    if "text" in template_value and "image" in template_value:
-                        fixed[key] = {"text": "", "image": ""}
-                    else:
-                        fixed[key] = self._fix_dict_schema({}, template_value)
-                elif isinstance(template_value, list):
-                    fixed[key] = []  # Empty array
-                elif isinstance(template_value, str):
-                    fixed[key] = ""  # Empty string
-                else:
-                    fixed[key] = template_value  # Use template value
-        
-        return fixed
-    
-def _format_image_mapping_fallback(image_mappings: List[Dict]) -> str:
-    """Format image mappings when pre-formatted text not provided."""
+# ============================================================================
+# Fallback image mapping formatter (used when prompt text not pre-built)
+# ============================================================================
+
+def format_image_mapping_fallback(image_mappings: List[Dict]) -> str:
     if not image_mappings:
         return ""
-    
-    lines = ["\n\nIMAGES IN THIS SECTION:"]
-    lines.append("-" * 60)
-    
+    lines = ["\n\nIMAGES IN THIS SECTION:", "-" * 60]
     for img in image_mappings:
-        sorted_idx = img.get('sorted_index', img.get('index', 0))
-        lines.append(
-            f"[{sorted_idx}] Page {img['page']}, {img['grid']} (Y:{img['y_percent']:.0f}%)"
-        )
+        idx = img.get("sorted_index", img.get("index", 0))
+        lines.append(f"[{idx}] Page {img['page']}, {img['grid']} (Y:{img['y_percent']:.0f}%)")
         lines.append(f"    Description: {img['description'][:50]}...")
         lines.append(f"    PATH: {img['path']}")
         lines.append("")
-    
-    lines.append("-" * 60)
-    lines.append("Match images by PAGE and POSITION, then copy exact PATH.")
-    
+    lines += ["-" * 60, "Match images by PAGE and POSITION, then copy exact PATH."]
     return "\n".join(lines)

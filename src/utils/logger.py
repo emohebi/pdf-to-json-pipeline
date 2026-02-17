@@ -1,42 +1,14 @@
-"""
-Logging configuration for the pipeline.
-"""
+"""Logging configuration."""
 import logging
 import sys
 
-
-def setup_logger(name: str, log_file: str = None) -> logging.Logger:
-    """
-    Set up logger with console output.
-    
-    Args:
-        name: Logger name
-        log_file: Optional log file path
-    
-    Returns:
-        Configured logger
-    """
+def setup_logger(name: str, level=logging.INFO) -> logging.Logger:
     logger = logging.getLogger(name)
-    
-    # Set level
-    logger.setLevel(logging.INFO)
-    
-    # Prevent duplicate handlers
-    if logger.handlers:
-        return logger
-    
-    # Console handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_formatter = logging.Formatter(
-        '%(levelname)-8s %(name)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    console_handler.setFormatter(console_formatter)
-    logger.addHandler(console_handler)
-    
+    if not logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        ))
+        logger.addHandler(handler)
+    logger.setLevel(level)
     return logger
-
-
-# Create default loggers
-pipeline_logger = setup_logger('pipeline')
-error_logger = setup_logger('errors')

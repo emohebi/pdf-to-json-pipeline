@@ -1,202 +1,179 @@
 """
-Stage 3: Validation & Aggregation Agent - DocuPorter Format
-Validates and combines section JSONs into final document with DocuPorter format.
+Stage 3: Validation & Aggregation Agent - Fully config-driven.
+Validates and combines section JSONs into final document.
+Uses assembly_order, structure_types, name_mapping from config.json.
+No hardcoded section types.
 """
-from typing import Dict, List, Any
-from datetime import datetime
+import copy
+from typing import Dict, List, Any, Tuple
 
 from config.settings import CONFIDENCE_THRESHOLD, LOW_CONFIDENCE_THRESHOLD
-from src.utils import setup_logger, StorageManager
-from src.utils.docuporter_processor import (
-    format_section_for_docuporter,
-    clean_empty_fields
+from config.config_loader import (
+    get_assembly_order,
+    get_object_section_types,
+    get_array_section_types,
+    get_section_name_mapping,
+    get_section_schemas,
+    get_empty_array_sections,
 )
+from src.utils import setup_logger, StorageManager
 
-logger = setup_logger('validator_docuporter')
+logger = setup_logger("validator_docuporter")
+
+
+def clean_empty_fields(data: Any) -> Any:
+    """Recursively remove empty fields from extracted data."""
+    if isinstance(data, dict):
+        has_content = False
+        cleaned = {}
+        for k, v in data.items():
+            if isinstance(v, str):
+                if v:
+                    has_content = True
+                cleaned[k] = v
+            else:
+                cv = clean_empty_fields(v)
+                if cv:
+                    has_content = True
+                cleaned[k] = cv
+        if not has_content and set(data.keys()).issubset({"text", "image"}):
+            return {}
+        return cleaned if has_content else {}
+    elif isinstance(data, list):
+        return [ci for ci in (clean_empty_fields(i) for i in data) if ci]
+    return data
+
+
+def format_section_for_docuporter(data: Any, section_type: str) -> Any:
+    """Format extracted data for final output. Pass-through with cleaning."""
+    return clean_empty_fields(data) if data else data
 
 
 class ValidationAgentDocuPorter:
-    """Agent to validate and combine section JSONs in DocuPorter format."""
-    
+    """Validate and combine section JSONs. Fully config-driven."""
+
     def __init__(self):
-        self.logger = logger
         self.storage = StorageManager()
-    
+        self._object_types = set(get_object_section_types())
+        self._array_types = set(get_array_section_types())
+        self._name_mapping = get_section_name_mapping()
+        self._assembly_order = get_assembly_order()
+        self._schemas = get_section_schemas()
+        self._empty_array_sections = set(get_empty_array_sections())
+
     def validate_and_combine(
         self,
         document_header: Dict,
         section_jsons: List[Dict],
         document_metadata: Dict,
-        document_id: str
-    ) -> Dict:
-        """
-        Combine document header and sections into final DocuPorter format.
-        
-        Args:
-            document_header: Extracted document header
-            section_jsons: List of extracted sections
-            document_metadata: Document processing metadata
-            document_id: Document ID
-            
-        Returns:
-            Complete document in DocuPorter format
-        """
+        document_id: str,
+    ) -> Tuple[Dict, Dict]:
         logger.info(f"[{document_id}] Combining document with {len(section_jsons)} sections")
-        
-        # Initialize document structure
-        document_json = {
-            'document_id': document_id,
-            'document_header': document_header
-        }
-        
-        # Add section names to header
+
+        document_json = {"document_id": document_id, "document_header": document_header}
+
+        # Populate header sections list
         section_names = []
-        for section in section_jsons:
-            section_name = section.get('section_name', 'Unknown')
-            if section_name not in section_names:
-                section_names.append(section_name)
-        document_json['document_header']['sections'] = section_names
-        
-        # Process each section
-        sections_by_type = {}
+        for s in section_jsons:
+            name = s.get("section_name", "Unknown")
+            if name not in section_names:
+                section_names.append(name)
+        document_json["document_header"]["sections"] = section_names
+
+        # Bucket each section by type
+        sections_by_type: Dict[str, Any] = {}
         unhandled_content = []
-        
+
         for section in section_jsons:
-            section_type = section.get('_metadata', {}).get('section_type', 'unhandled_content')
-            section_data = section.get('data', [])
-            
-            # Map old names to new names
-            if section_type == 'attached_images':
-                section_type = 'attached images'
-            
-            # Format section data for DocuPorter
-            formatted_data = format_section_for_docuporter(section_data, section_type)
-            
-            # Handle different section structures
-            if section_type in ['safety', 'execution_condition']:
-                # These are single object sections
-                if section_type not in sections_by_type:
-                    sections_by_type[section_type] = formatted_data
+            stype = section.get("_metadata", {}).get("section_type", "unhandled_content")
+            sdata = section.get("data", [])
+
+            # Apply name mapping from config
+            for alias, canonical in self._name_mapping.items():
+                if stype == alias:
+                    stype = canonical
+
+            formatted = format_section_for_docuporter(sdata, stype)
+
+            if stype in self._object_types:
+                # Object sections: merge dicts
+                if stype not in sections_by_type:
+                    sections_by_type[stype] = formatted
+                elif isinstance(formatted, dict):
+                    sections_by_type[stype].update(formatted)
+            elif stype in self._array_types:
+                # Array sections: extend lists
+                sections_by_type.setdefault(stype, [])
+                if isinstance(formatted, list):
+                    sections_by_type[stype].extend(formatted)
                 else:
-                    # Merge if multiple found
-                    if isinstance(formatted_data, dict):
-                        sections_by_type[section_type].update(formatted_data)
-            elif section_type in [
-                'material_risks_and_controls',
-                'additional_controls_required',
-                'additional_ppe_required',
-                'specific_competencies_knowledge_and_skills',
-                'tooling_equipment_required',
-                'reference_documentation',
-                'reference_drawings',
-                'attached images',
-                'task_activities'
-            ]:
-                # These are array sections
-                if section_type not in sections_by_type:
-                    sections_by_type[section_type] = []
-                
-                if isinstance(formatted_data, list):
-                    sections_by_type[section_type].extend(formatted_data)
-                else:
-                    sections_by_type[section_type].append(formatted_data)
-            else:
-                # Unhandled content
-                unhandled_item = {
-                    'section': section.get('section_name', 'Unknown'),
-                    'orig_text': '',
-                    'orig_image': '',
-                    'text': '',
-                    'image': ''
+                    sections_by_type[stype].append(formatted)
+            elif stype == "unhandled_content":
+                item = {
+                    "section": section.get("section_name", "Unknown"),
+                    "text": "",
+                    "image": "",
                 }
-                # Try to extract some text from the data
-                if isinstance(section_data, dict):
-                    for key, value in section_data.items():
-                        if isinstance(value, str) and value:
-                            unhandled_item['orig_text'] = value
-                            unhandled_item['text'] = value
+                if isinstance(sdata, dict):
+                    for v in sdata.values():
+                        if isinstance(v, str) and v:
+                            item["text"] = v
                             break
-                unhandled_content.append(unhandled_item)
-        
-        # Add sections to document
-        section_order = [
-            'safety',
-            'material_risks_and_controls',
-            'additional_controls_required',
-            'additional_ppe_required',
-            'specific_competencies_knowledge_and_skills',
-            'tooling_equipment_required',
-            'reference_documentation',
-            'attached images',
-            'task_activities',
-            'unhandled_content'
-        ]
-        
-        for section_type in section_order:
-            if section_type in sections_by_type:
-                document_json[section_type] = sections_by_type[section_type]
-            elif section_type == 'unhandled_content':
-                document_json['unhandled_content'] = unhandled_content
+                unhandled_content.append(item)
             else:
-                # Add empty structure for missing sections
-                document_json[section_type] = self._get_empty_section(section_type)
-        
-        # Clean empty fields
-        # document_json = clean_empty_fields(document_json)
-        
-        # Calculate confidence
-        confidences = [
-            s.get('_metadata', {}).get('confidence', 0.5)
-            for s in section_jsons
-        ]
-        avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
-        
-        # Determine if review needed
-        needs_review = (
-            avg_confidence < CONFIDENCE_THRESHOLD or
-            any(c < LOW_CONFIDENCE_THRESHOLD for c in confidences)
-        )
-        
-        # Store metadata separately if needed
+                # Unknown type: treat as array
+                sections_by_type.setdefault(stype, [])
+                if isinstance(formatted, list):
+                    sections_by_type[stype].extend(formatted)
+                elif formatted:
+                    sections_by_type[stype].append(formatted)
+
+        # Assemble in config-defined order
+        for stype in self._assembly_order:
+            if stype in sections_by_type:
+                document_json[stype] = sections_by_type[stype]
+            elif stype == "unhandled_content":
+                document_json["unhandled_content"] = unhandled_content
+            else:
+                document_json[stype] = self._get_empty_section(stype)
+
+        # Add any sections not in assembly_order
+        for stype, sdata in sections_by_type.items():
+            if stype not in document_json:
+                document_json[stype] = sdata
+
+        # Confidence
+        confidences = [s.get("_metadata", {}).get("confidence", 0.5) for s in section_jsons]
+        avg = sum(confidences) / len(confidences) if confidences else 0.0
+        needs_review = avg < CONFIDENCE_THRESHOLD or any(c < LOW_CONFIDENCE_THRESHOLD for c in confidences)
+
         document_metadata.update({
-            'confidence_score': avg_confidence,
-            'needs_review': needs_review,
-            'section_count': len(section_jsons)
+            "confidence_score": avg,
+            "needs_review": needs_review,
+            "section_count": len(section_jsons),
         })
-        
-        logger.info(
-            f"[{document_id}] Document combined successfully "
-            f"(confidence: {avg_confidence:.2f}, review: {needs_review})"
-        )
+
+        logger.info(f"[{document_id}] Combined (confidence: {avg:.2f}, review: {needs_review})")
         self.storage.save_final_json(document_id, document_json)
         return document_json, document_metadata
-    
+
     def _get_empty_section(self, section_type: str) -> Any:
-        """Get empty structure for a section type."""
-        from config.schemas_docuporter import SECTION_SCHEMAS
-        
-        schema = SECTION_SCHEMAS.get(section_type)
-        if schema and section_type not in ["material_risks_and_controls"]:
-            # Return clean empty version
-            return clean_empty_fields(schema)
-        
-        # Default empty structures
-        if section_type == 'safety':
-            return {
-                'safety_icon': {},
-                'safety_statement': [],
-                'safety_additional': []
-            }
-        elif section_type in [
-            'material_risks_and_controls',
-            'additional_controls_required',
-            'additional_ppe_required',
-            'specific_competencies_knowledge_and_skills',
-            'tooling_equipment_required',
-            'reference_documentation',
-            'attached images',
-            'task_activities'
-        ]:
+        """Return an empty structure for a section type, based on config."""
+        # Check if this section should be an empty array when children empty
+        if section_type in self._empty_array_sections:
             return []
-        else:
+
+        # Use schema to determine structure
+        schema = self._schemas.get(section_type)
+        if schema is not None:
+            if isinstance(schema, list):
+                return []
+            elif isinstance(schema, dict):
+                return {}
+
+        # Fallback based on structure_types
+        if section_type in self._object_types:
             return {}
+        if section_type in self._array_types:
+            return []
+        return {}
