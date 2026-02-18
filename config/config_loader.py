@@ -30,7 +30,7 @@ def load_config(config_path: str = None) -> Dict[str, Any]:
 
     for p in search:
         if p.exists():
-            with open(p, "r") as f:
+            with open(p, "r", encoding="utf-8") as f:
                 _config_cache = json.load(f)
             _config_path = str(p)
             return _config_cache
