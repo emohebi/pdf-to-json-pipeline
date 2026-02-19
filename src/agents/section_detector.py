@@ -1,33 +1,41 @@
 """
-Stage 1: Section Detection Agent - TOC-First Strategy.
+Section Detector - Accumulative Window Approach
 
-Detection flow:
-  1. Scan early pages for a Table of Contents (TOC).
-  2. If TOC found:
-     a. Extract top-level section entries from the TOC.
-     b. Map printed page numbers to absolute PDF page indices.
-     c. Add front_matter for pages before the first section.
-     d. Optionally add back_matter for trailing pages.
-  3. If NO TOC found:
-     a. Fall back to batch-based visual detection (original approach).
-  4. Merge and validate the final section list.
+Scans every page of the document from page 1 sequentially, detecting all
+structural elements: cover pages, tables of contents, blank pages, and
+content sections with their exact page ranges.
 
-All prompts, merge rules, and heading aliases come from config.json.
+Strategy (mirrors table_detector.py):
+  1. Scan page N: "What starts on this page?"
+     → Returns a LIST of elements found (cover, toc, blank, sections).
+       A single page may contain multiple section headings.
+  2. For each section found, grow window page by page to find its end:
+     [N], [N, N+1], [N, N+1, N+2]...
+  3. At each step the LLM sees the ORIGIN page plus all pages up to the
+     check page, so it always has full context.
+  4. The boundary check decides continuation based on semantic coherence
+     AND identifies any new section found (name + type), eliminating the
+     need for a separate identification call.
+  5. When the boundary check reports a new section:
+     - Record the current section's end page
+     - Trace the new section immediately (chain)
+  6. After chain breaks, advance past the last section and resume scanning.
+
+No TOC parsing, no page-number offsets, no numbering-pattern matching.
+All headings are treated as flat sections (no title vs section hierarchy).
 """
-import json
-from typing import List, Dict, Optional
 
-from config.settings import MODEL_MAX_TOKENS_DETECTION, MAX_IMAGES_PER_BATCH
+import json
+import re
+from typing import List, Dict, Optional, Tuple
+
+from config.settings import MAX_IMAGES_PER_BATCH
 from config.config_loader import (
     get_section_definitions,
-    get_detection_prompt_template,
     get_document_type_name,
     build_heading_alias_rules,
-    render_prompt,
     get_merge_rules,
 )
-from src.agents.toc_detector import TOCDetector
-from src.agents.page_number_resolver import PageNumberResolver
 from src.tools.llm_provider import invoke_multimodal
 from src.tools.bedrock_vision import prepare_images_for_bedrock
 from src.utils import setup_logger, StorageManager
@@ -35,19 +43,213 @@ from src.utils import setup_logger, StorageManager
 logger = setup_logger("section_detector")
 
 
-class SectionDetectionAgent:
-    """
-    Identify logical sections in PDF documents.
+# =====================================================================
+# Prompts
+# =====================================================================
 
-    Uses a TOC-first strategy: if a Table of Contents is found, it is
-    treated as the authoritative source for section boundaries.
-    Falls back to batch-based visual detection when no TOC is present.
-    """
+SCAN_PAGE_PROMPT = """\
+I am showing you a single page from a {doc_type} document.
+This is page {page_num} of {total_pages}.
+
+TASK: What structural elements START on this page?
+Examine the ENTIRE page from top to bottom. A single page may contain
+content from a previous section at the top, then one or more NEW sections
+starting further down.
+
+ELEMENT TYPES:
+- "cover_page"     : Title page, cover, or document header page
+- "toc_page"       : Table of Contents listing sections with page numbers
+- "blank_page"     : Blank or nearly blank page
+- "section_start"  : A new document section begins somewhere on this page
+
+WHAT COUNTS AS A SECTION:
+A section is a major structural division of the document that introduces
+a NEW TOPIC or subject area. Each section covers a self-contained subject.
+
+Any prominent heading that introduces a distinct topic is a section,
+whether it is a high-level document part (e.g. "STANDARD TERMS AND
+CONDITIONS", "SCHEDULE 1 - SCOPE OF WORK") or a specific topic
+(e.g. "DEFINITIONS", "INTERPRETATION", "TERMINATION", "INSURANCE").
+
+HOW TO IDENTIFY A SECTION START:
+Look for a prominent heading or title that introduces a DIFFERENT TOPIC
+from what came before. The heading usually stands out visually (bold,
+larger font, centered, or preceded by whitespace).
+
+DO NOT report as section_start:
+- Clauses, sub-clauses, or paragraphs that continue the SAME TOPIC
+  (even if they have numbers like 1., 1.1, 2.3, (a), (i))
+- Bold text for emphasis within paragraphs
+- Table headers, figure captions, list items
+- Page headers or footers
+- Numbered items that elaborate on the same subject
+- Heading under or related to a top level section name
+
+CRITICAL:
+If you see a TOP Level title for the section pick it as the section name.
+Example:
+                [TOP LEVEL TITLE] --> (pick this one as SECTION NAME)
+    [1  INTRODUCTION] --> (NOT a SECTION)
+
+{heading_alias_rules}
+
+SECTION TYPES: {section_types}
+
+Return ONLY valid JSON:
+{{
+  "elements_starting_here": [
+    {{
+      "page_type": "section_start" | "cover_page" | "toc_page" | "blank_page",
+      "section_name": "<heading text if section_start, or null, the most dominant top level text>",
+      "section_type": "<from section types list, or null>",
+      "confidence": <0.0-1.0>
+    }}
+  ]
+}}
+
+If NOTHING new starts on this page (pure continuation), return:
+{{
+  "elements_starting_here": []
+}}
+"""
+
+
+BOUNDARY_CHECK_PROMPT = """\
+I am showing you {n_images} consecutive pages from a {doc_type} document.
+
+The section "{section_name}" starts on the first page shown (page {start_page}).
+
+Your job: Look at ONLY the LAST page shown (page {check_page}) and determine
+whether the section "{section_name}" is still continuing there, or whether
+a NEW and DIFFERENT section has begun.
+
+== HOW TO DECIDE ==
+
+The section "{section_name}" CONTINUES on page {check_page} if:
+- The text on page {check_page} is about the SAME TOPIC as "{section_name}"
+- The content is a logical continuation: more clauses, paragraphs, tables,
+  or details that elaborate on or belong to "{section_name}"
+- Even if the content has sub-numbering (1.1, 2.3, (a), etc.), it still
+  belongs to "{section_name}" if it discusses the same subject matter
+- The text on page {check_page} is same type as {section_type}
+
+A NEW section starts on page {check_page} if:
+- A prominent heading introduces a DIFFERENT TOPIC or subject area
+- The subject matter shifts away from "{section_name}" to something
+  clearly distinct (e.g. from "Definitions" to "Liability")
+- A structural break appears: a new cover page, a new Table of Contents,
+  a signature/execution page, a blank separator, or an appendix divider
+- A new document part heading appears (e.g. "SCHEDULE 2", "PART B")
+
+== IMPORTANT ==
+Do NOT confuse sub-divisions within "{section_name}" with new sections.
+Clauses, sub-clauses, and numbered paragraphs that discuss aspects of
+the SAME TOPIC are part of "{section_name}", not new sections.
+
+The test is: "Has the SUBJECT MATTER changed?" If the topic is still
+"{section_name}", it continues — regardless of numbering or formatting.
+
+== ANSWER ==
+
+Return ONLY valid JSON:
+{{
+  "has_current_section_content": true | false,
+  "new_section_starts": true | false,
+  "new_sections": [
+    {{
+      "section_name": "<heading of the new section>",
+      "section_type": "<from types: {section_types}>",
+      "page_type": "section_start" | "cover_page" | "toc_page" | "blank_page"
+    }}
+  ],
+  "reason": "<brief explanation of what you see on page {check_page}>"
+}}
+
+RULES for "new_sections":
+- If new_section_starts is false, return an empty list: "new_sections": []
+- If new_section_starts is true, list ALL new sections/elements that begin
+  on page {check_page} (there may be more than one if a short section
+  starts and ends on the same page followed by another).
+"""
+
+TOC_BOUNDARY_CHECK_PROMPT = """\
+I am showing you {n_images} consecutive pages from a {doc_type} document.
+
+A Table of Contents (TOC) starts on the first page shown (page {start_page}).
+
+Your job: Look at ONLY the LAST page shown (page {check_page}) and determine
+whether the Table of Contents is still continuing there, or whether the TOC
+has ended and something DIFFERENT has begun.
+
+== HOW TO DECIDE ==
+
+The TOC CONTINUES on page {check_page} if:
+- The page contains a structured listing of section names, headings, or
+  chapter titles paired with page numbers or dot leaders
+  (e.g. "DEFINITIONS ......... 12")
+- The layout matches the TOC format from page {start_page}: indented entries,
+  numbered items with corresponding page references, or a columnar list of
+  contents
+- Even if the style varies slightly (e.g. grouping under a sub-heading like
+  "SCHEDULES" or "APPENDICES"), it is still a TOC if it lists document parts
+  with page references
+
+The TOC ENDS and something NEW starts on page {check_page} if:
+- The page contains actual document content: paragraphs, clauses, definitions,
+  legal text, or narrative prose — not just a listing of headings with page
+  numbers
+- A cover page, blank page, or section heading with body text appears
+- The format clearly shifts from a structured listing to document content
+- A different TOC appears (a separate Table of Contents for a different
+  document part, with its own "TABLE OF CONTENTS" title)
+
+== IMPORTANT ==
+A TOC page lists WHERE content is — it does NOT contain the content itself.
+If page {check_page} has actual body text, clauses, or detailed content
+(not just headings with page numbers), the TOC has ended.
+
+== ANSWER ==
+
+Return ONLY valid JSON:
+{{
+  "has_current_section_content": true | false,
+  "new_section_starts": true | false,
+  "new_sections": [
+    {{
+      "section_name": "<heading or descriptive name of what starts>",
+      "section_type": "<from types: {section_types}>",
+      "page_type": "section_start" | "cover_page" | "toc_page" | "blank_page"
+    }}
+  ],
+  "reason": "<brief explanation of what you see on page {check_page}>"
+}}
+
+RULES:
+- "has_current_section_content": true if page {check_page} has TOC entries
+- "new_section_starts": true if something OTHER than this TOC begins on
+  page {check_page} (including actual document content, a cover page,
+  a blank page, or a separate TOC)
+- If new_section_starts is true, "new_sections" MUST list what begins.
+  If a section heading with body text appears, report it as "section_start".
+  If a second separate TOC starts, report it as "toc_page".
+- If new_section_starts is false, return "new_sections": []
+"""
+
+# =====================================================================
+# Main Detector
+# =====================================================================
+
+class SectionDetectionAgent:
 
     def __init__(self):
-        self.section_definitions = get_section_definitions()
+        self.section_definitions = {
+                        "cover page": "Title page, cover, or document header page",
+                        "table of content": "Table of Contents listing sections with page numbers",
+                        "blank page": "Blank or nearly blank page",
+                        "section": "A new document section begins somewhere on this page",
+                    } #get_section_definitions()
         self.storage = StorageManager()
-        self.max_per_call = MAX_IMAGES_PER_BATCH
+        self.max_window = MAX_IMAGES_PER_BATCH
 
     # ==================================================================
     # Public API
@@ -56,31 +258,32 @@ class SectionDetectionAgent:
     def detect_sections(
         self, pages_data: List[Dict], document_id: str
     ) -> Optional[List[Dict]]:
+        """
+        Detect all sections in the document.
+
+        Args:
+            pages_data: List of page dicts (one per page, 0-indexed).
+                        Each dict is passed to prepare_images_for_bedrock().
+            document_id: Identifier for logging / storage.
+
+        Returns:
+            List of section dicts sorted by start_page, or None on failure.
+            Each dict has: section_type, section_name, start_page, end_page,
+            confidence, _source.
+        """
         total = len(pages_data)
         logger.info(f"[{document_id}] Detecting sections in {total} pages")
 
         try:
-            # --- Strategy 1: TOC-based detection ---
-            sections = self._try_toc_detection(pages_data, document_id)
+            sections = self._scan_all_pages(pages_data, document_id)
 
             if sections:
-                logger.info(
-                    f"[{document_id}] TOC-based detection succeeded: "
-                    f"{len(sections)} sections"
+                sections = self._ensure_full_coverage(
+                    sections, total, document_id
                 )
-            else:
-                # --- Strategy 2: Fallback to visual batch detection ---
-                logger.info(
-                    f"[{document_id}] Falling back to visual batch detection"
-                )
-                sections = self._detect_multi_batch(pages_data, document_id)
-
-            if sections:
-                # Ensure all pages are covered (fill gaps)
-                sections = self._ensure_full_coverage(sections, total, document_id)
                 self.storage.save_detection_result(document_id, sections)
                 logger.info(
-                    f"[{document_id}] Final detection: {len(sections)} sections"
+                    f"[{document_id}] Final: {len(sections)} sections"
                 )
 
             return sections
@@ -90,338 +293,350 @@ class SectionDetectionAgent:
             return None
 
     # ==================================================================
-    # Strategy 1: TOC-based detection
+    # Core scanning loop
     # ==================================================================
 
-    def _try_toc_detection(
+    def _scan_all_pages(
         self, pages_data: List[Dict], document_id: str
-    ) -> Optional[List[Dict]]:
-        """
-        Attempt to detect sections using the Table of Contents.
-        Returns a list of section dicts or None if TOC not found/usable.
-        """
-        toc_detector = TOCDetector()
-        toc_entries = toc_detector.detect_toc(pages_data, document_id)
-
-        if not toc_entries:
-            return None
-
-        # Build page number mapping, anchored to the TOC location
-        resolver = PageNumberResolver(
-            pages_data, toc_abs_start=toc_detector.toc_start_page
-        )
-        stats = resolver.get_mapping_stats()
-        logger.info(
-            f"[{document_id}] Page mapping: {stats['mapped_pages']}/"
-            f"{stats['total_pages']} pages resolved "
-            f"({stats['coverage_pct']}%), offset={stats['offset']}"
-        )
-
-        # Resolve TOC entries to absolute page ranges
-        total = len(pages_data)
-        sections = resolver.resolve_toc_entries(toc_entries, total)
-
-        if not sections:
-            logger.warning(
-                f"[{document_id}] TOC entries could not be resolved to pages"
-            )
-            return None
-
-        # ---- Verify boundaries by checking actual page images ----
-        sections = self._verify_section_boundaries(
-            sections, pages_data, document_id
-        )
-
-        # Add front_matter for pages before the first section
-        first_start = sections[0]["start_page"]
-        if first_start > 1:
-            sections.insert(0, {
-                "section_type": "front_matter",
-                "section_name": "Front Matter",
-                "start_page": 1,
-                "end_page": first_start - 1,
-                "confidence": 0.95,
-                "_source": "toc_inferred",
-            })
-
-        # Validate: no section should exceed total pages
-        for sec in sections:
-            sec["end_page"] = min(sec["end_page"], total)
-            sec["start_page"] = max(sec["start_page"], 1)
-
-        # Log the detected sections
-        for sec in sections:
-            logger.info(
-                f"  [{sec['section_type']}] '{sec['section_name']}' "
-                f"pages {sec['start_page']}-{sec['end_page']}"
-            )
-
-        return sections
-
-    # ==================================================================
-    # Boundary verification (end-page only)
-    # ==================================================================
-
-    def _verify_section_boundaries(
-        self,
-        sections: List[Dict],
-        pages_data: List[Dict],
-        document_id: str,
     ) -> List[Dict]:
         """
-        Verify and correct the END PAGE of each section.
+        Sequential scan from page 1 to the last page.
 
-        The TOC gives correct START pages. The problem is with end pages:
-        the naive formula `end = next_section_start - 1` can be wrong
-        because the current section's content may continue onto the page
-        where the next section's heading appears.
-
-        Example:
-          TOC: "Definitions" -> page 3, "Services" -> page 7
-          Naive: Definitions = 3-6, Services = 7+
-          Reality: Definitions content continues onto page 7;
-                   the "Services" heading appears partway through page 7.
-          Correct: Definitions = 3-7, Services = 7+  (page 7 shared)
-
-        Approach:
-          For each boundary, send the boundary page (next_start) to
-          the LLM and ask: "Does this page contain content from the
-          PREVIOUS section before the next section's heading?"
-          If yes -> current section's end_page = next_start (shared page).
-          If no  -> current section's end_page = next_start - 1 (no overlap).
+        Flow per page:
+          scan → list of elements starting here
+          for each element:
+            (cover/toc/blank) → absorb consecutive same-type pages
+            (section_start)   → trace → chain via boundary info → advance
+          if empty list → continuation, advance +1
         """
-        if len(sections) < 2:
-            return sections
+        type_map = {
+                        "cover_page": ("front_matter", "Cover Page"),
+                        "toc_page": ("front_matter", "Table of Contents"),
+                        "blank_page": ("unhandled_content", "Blank Page"),
+                    }
+        total = len(pages_data)
+        sections: List[Dict] = []
+        current_page = 1
+        claimed_pages: set = set()
 
-        logger.info(
-            f"[{document_id}] Verifying {len(sections) - 1} "
-            "section boundary end-pages"
-        )
+        while current_page <= total:
+            if current_page in claimed_pages:
+                current_page += 1
+                if current_page > total: break
 
-        for i in range(len(sections) - 1):
-            current_sec = sections[i]
-            next_sec = sections[i + 1]
+            logger.info(f"[{document_id}] Scanning page {current_page}/{total}")
 
-            boundary_page = next_sec["start_page"]  # TOC start (authoritative)
-            current_name = current_sec["section_name"]
-            next_name = next_sec["section_name"]
+            # --- Step 1: scan this single page ---
+            scan = self._scan_page(
+                pages_data[current_page - 1], current_page, total,
+            )
+            elements = scan.get("elements_starting_here", [])
 
-            # Nothing to verify if sections are already adjacent with no gap
-            # (current end == boundary - 1 is the naive default we want to check)
-            if boundary_page < 1 or boundary_page > len(pages_data):
+            if not elements:
+                logger.info(f"[{document_id}]   continuation (skip)")
+                claimed_pages.add(current_page)
+                current_page += 1
                 continue
+            claimed_pages.add(current_page)
+            # --- Step 2: process each element found on this page ---
+            element_page = current_page
+            for elem in elements:
+                if current_page > element_page:
+                    break
+                page_type = elem.get("page_type", "section_start")
 
+                # ── COVER / TOC / BLANK ───────────────────────
+                if page_type in ("cover_page", "toc_page", "blank_page"):
+                    name, stype = type_map[page_type]
+                
+                elif page_type == "section_start":
+                    name = elem.get("section_name") or "Unknown Section"
+                    stype = elem.get("section_type") or "unhandled_content"
+
+                logger.info(
+                    f"[{document_id}]   Section: '{name}' ({stype})"
+                )
+
+                # Trace using accumulative window
+                end_page, next_sections, shared_page = self._trace_section(
+                    pages_data, current_page, name, stype,
+                    total, document_id,
+                )
+                if not shared_page:
+                    claimed_pages.add(end_page)
+                sections.append({
+                    "section_type": stype,
+                    "section_name": name,
+                    "start_page": current_page,
+                    "end_page": end_page,
+                    "confidence": elem.get("confidence", 0.85),
+                    "_source": "scan",
+                })
+
+                logger.info(
+                    f"[{document_id}]   Pages {current_page}-{end_page}"
+                )
+                current_page = end_page
+
+        # Post-process: merge adjacent same-type sections
+        sections.sort(key=lambda s: s["start_page"])
+        sections = self._merge_adjacent(sections, document_id)
+
+        logger.info(f"[{document_id}] Scan done: {len(sections)} sections")
+        for s in sections:
             logger.info(
-                f"  Boundary {i + 1}: '{current_name}' ends at ? | "
-                f"'{next_name}' starts at page {boundary_page}"
+                f"  [{s['section_type']}] '{s['section_name']}'"
+                f" pp {s['start_page']}-{s['end_page']}"
             )
-
-            # Send the single boundary page to check for shared content
-            extends = self._check_section_continues_on_page(
-                pages_data[boundary_page - 1],
-                boundary_page,
-                current_name,
-                next_name,
-                document_id,
-            )
-
-            if extends:
-                current_sec["end_page"] = boundary_page
-                logger.info(
-                    f"    -> '{current_name}' extends onto page {boundary_page} "
-                    f"(shared with '{next_name}')"
-                )
-            else:
-                current_sec["end_page"] = boundary_page - 1
-                logger.info(
-                    f"    -> '{current_name}' ends at page {boundary_page - 1} "
-                    f"(clean break)"
-                )
-
-        # Safety: ensure end >= start for all sections
-        for sec in sections:
-            if sec["end_page"] < sec["start_page"]:
-                sec["end_page"] = sec["start_page"]
-
         return sections
 
-    def _check_section_continues_on_page(
-        self,
-        page_data: Dict,
-        abs_page: int,
-        current_section_name: str,
-        next_section_name: str,
-        document_id: str,
-    ) -> bool:
-        """
-        Check whether the current section's content continues onto
-        this page BEFORE the next section's heading appears.
+    # ==================================================================
+    # Single-page scan
+    # ==================================================================
 
-        Returns True if the page has content from the current section
-        (i.e., the next section heading is NOT at the very top of the page,
-        meaning there is preceding content belonging to the current section).
-        Returns False if the next section heading is at the top of the page
-        or the page belongs entirely to the next section.
+    def _scan_page(
+        self, page_data: Dict, page_num: int, total_pages: int,
+    ) -> Dict:
+        """
+        Scan a single page — what starts here?
+
+        Returns dict with "elements_starting_here": list of elements.
+        Each element has page_type, section_name, section_type, confidence.
         """
         images = prepare_images_for_bedrock([page_data])
 
-        prompt = (
-            f"I am showing you a single document page (absolute page {abs_page}).\n\n"
-            "CONTEXT:\n"
-            f"- The section '{current_section_name}' is expected to end "
-            f"around this page.\n"
-            f"- The section '{next_section_name}' is expected to start "
-            f"on this page.\n\n"
-            "TASK: Look at this page and determine:\n"
-            f"Does content belonging to '{current_section_name}' appear on "
-            f"this page BEFORE the heading '{next_section_name}'?\n\n"
-            "RULES:\n"
-            f"- If the heading '{next_section_name}' is at the VERY TOP of "
-            "the page (first element, no prior content), answer false — the "
-            "previous section does NOT continue onto this page.\n"
-            f"- If there is ANY content (text, tables, figures) from "
-            f"'{current_section_name}' ABOVE or BEFORE the heading "
-            f"'{next_section_name}', answer true — the previous section "
-            "DOES continue onto this page.\n"
-            f"- If the heading '{next_section_name}' does not appear on this "
-            "page at all, answer true — the previous section still continues.\n\n"
-            "Return ONLY a JSON object (no markdown, no extra text):\n"
-            "{\n"
-            '  "continues": true or false\n'
-            "}"
-        )
-
-        try:
-            response = invoke_multimodal(
-                images=images,
-                prompt=prompt,
-                max_tokens=128,
-            )
-            data = self._parse_json_obj(response)
-            return data.get("continues", False)
-
-        except Exception as e:
-            logger.warning(
-                f"[{document_id}] Boundary check failed for page {abs_page}: {e}"
-            )
-            # Default: assume no overlap (safe fallback)
-            return False
-
-    @staticmethod
-    def _parse_json_obj(response: str) -> Dict:
-        """Parse a JSON object from an LLM response."""
-        import re
-        response = response.strip()
-        for pfx in ("```json", "```"):
-            if response.startswith(pfx):
-                response = response[len(pfx):]
-        if response.endswith("```"):
-            response = response[:-3]
-        response = response.strip()
-        match = re.search(r"\{[\s\S]*\}", response)
-        if match:
-            return json.loads(match.group(0))
-        raise ValueError(f"No JSON object in response: {response[:200]}")
-
-    # ==================================================================
-    # Strategy 2: Visual batch detection (fallback)
-    # ==================================================================
-
-    def _detect_multi_batch(self, pages_data, document_id):
-        """Original batch-based detection using visual analysis."""
-        total = len(pages_data)
-        n_batches = (total + self.max_per_call - 1) // self.max_per_call
-        logger.info(f"[{document_id}] {total} pages -> {n_batches} batches")
-
-        batch_sections = []
-        for b in range(n_batches):
-            s = b * self.max_per_call
-            e = min(s + self.max_per_call, total)
-            batch = pages_data[s:e]
-            sp, ep = s + 1, e  # Absolute page numbers (1-based)
-            logger.info(
-                f"[{document_id}] Batch {b+1}/{n_batches}: "
-                f"absolute pages {sp}-{ep}"
-            )
-
-            images = prepare_images_for_bedrock(batch)
-            prompt = self._build_prompt(sp, ep, total)
-            resp = invoke_multimodal(
-                images=images,
-                prompt=prompt,
-                max_tokens=MODEL_MAX_TOKENS_DETECTION,
-            )
-            secs = self._parse(resp)
-
-            # Clamp returned pages to valid batch range
-            for sec in secs:
-                sec["start_page"] = max(sec.get("start_page", sp), sp)
-                sec["end_page"] = min(sec.get("end_page", ep), ep)
-
-            batch_sections.append(
-                {"start_page": sp, "end_page": ep, "sections": secs}
-            )
-
-        return self._merge_batches(batch_sections, total, document_id)
-
-    def _build_prompt(self, start_page, end_page, total_pages) -> str:
-        """Build detection prompt from config template."""
-        template = get_detection_prompt_template()
-        return render_prompt(
-            template,
-            document_type_name=get_document_type_name(),
+        prompt = SCAN_PAGE_PROMPT.format(
+            page_num=page_num,
             total_pages=total_pages,
-            start_page=start_page,
-            end_page=end_page,
-            section_types_csv=", ".join(self.section_definitions.keys()),
-            section_definitions_json=json.dumps(
-                self.section_definitions, indent=2
-            ),
+            doc_type=get_document_type_name(),
+            section_types=", ".join(self.section_definitions.keys()),
             heading_alias_rules=build_heading_alias_rules(),
         )
 
+        try:
+            resp = invoke_multimodal(
+                images=images, prompt=prompt, max_tokens=512,
+            )
+            return self._parse_json(resp)
+        except Exception as e:
+            logger.warning(f"Scan failed page {page_num}: {e}")
+            return {"elements_starting_here": []}
+
     # ==================================================================
-    # Merge logic
+    # Section tracing (accumulative window — core algorithm)
     # ==================================================================
 
-    def _merge_batches(self, batch_sections, total_pages, document_id):
-        """Merge sections from multiple visual detection batches."""
-        all_secs = []
-        for bi in batch_sections:
-            all_secs.extend(bi["sections"])
-        if not all_secs:
-            return None
+    def _trace_section(
+        self,
+        pages_data: List[Dict],
+        section_start: int,
+        section_name: str,
+        section_type: str,
+        total_pages: int,
+        document_id: str,
+    ) -> Tuple[int, List[Dict]]:
+        """
+        Grow window page by page from section_start until the LLM
+        detects a semantic/logical break — a different topic starts.
 
-        all_secs.sort(key=lambda s: s["start_page"])
+        Window growth:
+          [start] → [start, start+1] → [start, start+1, start+2] ...
 
-        # Build lookup of merge rules from config
-        merge_rules = {r["section_type"]: r for r in get_merge_rules()}
+        The LLM always sees the origin page so it can judge whether
+        the check page is still about the same topic.
 
-        merged = []
-        current = all_secs[0]
-        for nxt in all_secs[1:]:
-            adjacent = current["end_page"] >= nxt["start_page"] - 1
-            if adjacent and self._should_merge(current, nxt, merge_rules):
-                current["end_page"] = max(
-                    current["end_page"], nxt["end_page"]
-                )
-                current["confidence"] = (
-                    current.get("confidence", 0.8)
-                    + nxt.get("confidence", 0.8)
-                ) / 2
+        If the window exceeds max_window, keep the ORIGIN page plus
+        the most recent pages (sliding strategy).
+
+        Returns:
+            (end_page, next_sections)
+            - end_page: last page belonging to this section
+            - next_sections: list of new section dicts discovered on
+              the boundary page (each has section_name, section_type,
+              page_type, _boundary_page). Empty list if section runs
+              to end of document.
+
+        Shared-page handling:
+          Both old content AND new heading on check_page:
+            end_page = check_page, next sections start on check_page
+          Only new heading (no old content) on check_page:
+            end_page = check_page - 1, next sections start on check_page
+        """
+        current_end = section_start
+        exclude_pages = []
+        while current_end < total_pages:
+            check_page = current_end + 1
+            window_size = check_page - section_start + 1
+            logger.info(f"Window size: pages: {section_start} - {check_page}")
+            # Build the accumulative window
+            if window_size <= self.max_window:
+                window = [
+                    pages_data[p - 1]
+                    for p in range(section_start, check_page + 1)
+                ]
             else:
-                merged.append(current)
-                current = nxt
-        merged.append(current)
+                # Sliding: origin + most recent pages
+                window = [pages_data[section_start - 1]]
+                recent_start = check_page - self.max_window + 2
+                logger.info(f"Window size capped: origin + pages: {recent_start} - {check_page}")
+                for p in range(recent_start, check_page + 1):
+                    window.append(pages_data[p - 1])
 
-        logger.info(
-            f"[{document_id}] Merged {len(all_secs)} -> {len(merged)} sections"
+            result = self._check_boundary(
+                window, section_name, section_type, section_start, check_page,
+            )
+
+            has_content = result.get("has_current_section_content", True)
+            new_starts = result.get("new_section_starts", False)
+            new_sections = result.get("new_sections", [])
+
+            # Tag each discovered section with the boundary page
+            for ns in new_sections:
+                ns["_boundary_page"] = check_page
+
+            if new_starts and has_content:
+                # SHARED PAGE: old content + new heading on same page
+                logger.info(
+                    f"[{document_id}]   Page {check_page}: shared — "
+                    f"'{section_name}' content + new section. "
+                    f"End = {check_page}."
+                )
+                return check_page, new_sections, True
+
+            elif new_starts and not has_content:
+                # EXCLUSIVE: new section owns this page entirely
+                logger.info(
+                    f"[{document_id}]   Page {check_page}: new section "
+                    f"starts exclusively. '{section_name}' ends at "
+                    f"{current_end}."
+                )
+                return current_end, new_sections, False
+
+            elif has_content:
+                # Section continues — grow window
+                current_end = check_page
+
+            else:
+                # No old content, no new section (e.g. blank page,
+                # appendix divider). Treat as boundary.
+                logger.info(
+                    f"[{document_id}]   Page {check_page}: no content, "
+                    f"no new section. '{section_name}' ends at "
+                    f"{current_end}."
+                )
+                # Return empty list — main loop will re-scan check_page
+                return current_end, [], False
+
+        # Reached end of document
+        return total_pages, [], False
+
+    # ==================================================================
+    # Boundary check — semantic continuation + new section identification
+    # ==================================================================
+
+    def _check_boundary(
+        self,
+        window_pages: List[Dict],
+        section_name: str,
+        section_type: str,
+        start_page: int,
+        check_page: int,
+    ) -> Dict:
+        """
+        Send the accumulative window to the LLM and ask about the
+        LAST page:
+          1. Is the content still about the same topic?
+          2. Does a different topic begin? If so, WHAT is it?
+
+        Returns full result dict with:
+          - has_current_section_content: bool
+          - new_section_starts: bool
+          - new_sections: list of {section_name, section_type, page_type}
+          - reason: str
+        """
+        images = prepare_images_for_bedrock(window_pages)
+
+        prompt = BOUNDARY_CHECK_PROMPT.format(
+            n_images=len(images),
+            doc_type=get_document_type_name(),
+            section_name=section_name,
+            section_type=section_type,
+            start_page=start_page,
+            check_page=check_page,
+            section_types=", ".join(self.section_definitions.keys()),
         )
+
+        if section_type == "Table of Contents":
+            prompt = TOC_BOUNDARY_CHECK_PROMPT.format(
+                n_images=len(images),
+                doc_type=get_document_type_name(),
+                section_name=section_name,
+                section_type=section_type,
+                start_page=start_page,
+                check_page=check_page,
+                section_types=", ".join(self.section_definitions.keys()),
+            )
+
+        try:
+            resp = invoke_multimodal(
+                images=images, prompt=prompt, max_tokens=256,
+            )
+            data = self._parse_json(resp)
+
+            logger.debug(
+                f"  Page {check_page}: "
+                f"content={data.get('has_current_section_content')} "
+                f"new={data.get('new_section_starts')} "
+                f"({data.get('reason', '')})"
+            )
+            return data
+
+        except Exception as e:
+            logger.warning(
+                f"Boundary check failed page {check_page}: {e}"
+            )
+            return {
+                "has_current_section_content": True,
+                "new_section_starts": False,
+                "new_sections": [],
+            }
+
+    # ==================================================================
+    # Merge adjacent same-type sections
+    # ==================================================================
+
+    def _merge_adjacent(
+        self, sections: List[Dict], document_id: str
+    ) -> List[Dict]:
+        """Merge consecutive sections with the same type/name."""
+        if len(sections) <= 1:
+            return sections
+
+        merge_rules = {r["section_type"]: r for r in get_merge_rules()}
+        merged = [sections[0]]
+
+        for nxt in sections[1:]:
+            cur = merged[-1]
+            adjacent = (
+                cur["end_page"] is not None
+                and nxt["start_page"] <= cur["end_page"] + 1
+            )
+            if adjacent and self._should_merge(cur, nxt, merge_rules):
+                cur["end_page"] = max(
+                    cur["end_page"] or 0, nxt["end_page"] or 0
+                )
+            else:
+                merged.append(nxt)
+
+        if len(merged) != len(sections):
+            logger.info(
+                f"[{document_id}] Merged {len(sections)} -> "
+                f"{len(merged)}"
+            )
         return merged
 
     @staticmethod
     def _should_merge(cur, nxt, rules):
-        """Decide whether to merge two adjacent sections based on config."""
         if cur["section_type"] != nxt["section_type"]:
             return False
         rule = rules.get(cur["section_type"])
@@ -433,83 +648,109 @@ class SectionDetectionAgent:
         return cur["section_name"] == nxt["section_name"]
 
     # ==================================================================
-    # Coverage validation
+    # Full coverage — fill gaps
     # ==================================================================
 
     def _ensure_full_coverage(
         self, sections: List[Dict], total_pages: int, document_id: str
     ) -> List[Dict]:
         """
-        Ensure every page from 1 to total_pages belongs to exactly one section.
-        Fill gaps with 'unhandled_content' sections.
+        Fill any gaps between detected sections so every page is covered.
         """
         if not sections:
             return sections
 
         sections.sort(key=lambda s: s["start_page"])
         filled = []
-        expected_start = 1
+        expected = 1
 
         for sec in sections:
-            # Fill gap before this section
-            if sec["start_page"] > expected_start:
+            sp = sec["start_page"]
+
+            if sp < expected:
+                sp = expected
+
+            if sp > expected:
                 gap = {
                     "section_type": "unhandled_content",
                     "section_name": "Unhandled Content",
-                    "start_page": expected_start,
-                    "end_page": sec["start_page"] - 1,
+                    "start_page": expected,
+                    "end_page": sp - 1,
                     "confidence": 0.5,
                     "_source": "gap_fill",
                 }
                 filled.append(gap)
                 logger.info(
-                    f"[{document_id}] Filled gap: pages "
-                    f"{gap['start_page']}-{gap['end_page']}"
+                    f"[{document_id}] Gap: pp {expected}-{sp - 1}"
                 )
 
             filled.append(sec)
-            expected_start = sec["end_page"] + 1
+            ep = sec["end_page"]
+            expected = (
+                (ep + 1) if ep is not None
+                else sec["start_page"] + 1
+            )
 
-        # Fill trailing gap
-        if expected_start <= total_pages:
-            # Check if the last section looks like it should extend
+        if expected <= total_pages:
             last = filled[-1]
-            if last["section_type"] in ("back_matter", "unhandled_content"):
+            if last["section_type"] in (
+                "back_matter", "unhandled_content"
+            ):
                 last["end_page"] = total_pages
             else:
-                gap = {
+                filled.append({
                     "section_type": "back_matter",
                     "section_name": "Back Matter",
-                    "start_page": expected_start,
+                    "start_page": expected,
                     "end_page": total_pages,
                     "confidence": 0.7,
                     "_source": "trailing_fill",
-                }
-                filled.append(gap)
+                })
                 logger.info(
-                    f"[{document_id}] Added trailing back_matter: pages "
-                    f"{gap['start_page']}-{gap['end_page']}"
+                    f"[{document_id}] Trailing: pp {expected}-"
+                    f"{total_pages}"
                 )
 
         return filled
 
     # ==================================================================
-    # Parse
+    # JSON parsing
     # ==================================================================
 
-    def _parse(self, response: str) -> List[Dict]:
+    @staticmethod
+    def _parse_json(response: str) -> Dict:
+        """Parse JSON from LLM response, handling markdown fences."""
         response = response.strip()
+
         for pfx in ("```json", "```"):
             if response.startswith(pfx):
                 response = response[len(pfx):]
         if response.endswith("```"):
             response = response[:-3]
         response = response.strip()
-        try:
-            secs = json.loads(response)
-            if not isinstance(secs, list):
-                raise ValueError("Not a JSON array")
-            return secs
-        except json.JSONDecodeError as e:
-            logger.error(f"Parse failed: {e}")
-            raise
+
+        m = re.search(r"\{[\s\S]*\}", response)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except json.JSONDecodeError:
+                pass
+
+        depth = 0
+        start = None
+        for i, ch in enumerate(response):
+            if ch == "{":
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0 and start is not None:
+                    try:
+                        return json.loads(response[start:i + 1])
+                    except json.JSONDecodeError:
+                        pass
+                    start = None
+
+        logger.error(f"JSON parse failed: {response[:200]}")
+        return {}

@@ -12,7 +12,7 @@ import json
 import re
 from typing import List, Dict, Optional, Tuple
 
-from config.settings import MODEL_MAX_TOKENS_DETECTION, MAX_IMAGES_PER_BATCH
+from config.settings import MAX_IMAGES_PER_BATCH
 from config.config_loader import (
     get_section_definitions,
     get_document_type_name,
@@ -55,9 +55,17 @@ class TOCDetector:
         self,
         pages_data: List[Dict],
         document_id: str,
+        scan_from: int = 1,
     ) -> Optional[List[Dict]]:
         """
-        Scan early pages for a TOC and extract top-level entries.
+        Scan pages starting from `scan_from` for a TOC and extract
+        top-level entries.
+
+        Args:
+            pages_data: ALL pages in the document.
+            document_id: Identifier for logging.
+            scan_from: Absolute page number to start scanning from (1-based).
+                       Pages before this are ignored.
 
         Returns:
             List of dicts with keys:
@@ -66,21 +74,38 @@ class TOCDetector:
                 - toc_level: int     (1 = top-level section)
             or None if no TOC found.
         """
-        scan_count = min(self.toc_scan_pages, len(pages_data))
-        scan_pages = pages_data[:scan_count]
+        total = len(pages_data)
+        scan_end_abs = min(scan_from + self.toc_scan_pages - 1, total)
+        scan_pages = pages_data[scan_from - 1 : scan_end_abs]
+
+        if not scan_pages:
+            return None
 
         logger.info(
-            f"[{document_id}] Scanning first {scan_count} pages for Table of Contents"
+            f"[{document_id}] Scanning pages {scan_from}-{scan_end_abs} "
+            f"for Table of Contents"
         )
 
         # --- Step 1: Find which pages contain a TOC ---
-        toc_page_range = self._find_toc_pages(scan_pages, document_id)
+        toc_page_range = self._find_toc_pages(
+            scan_pages, document_id, abs_offset=scan_from
+        )
         if toc_page_range is None:
-            logger.info(f"[{document_id}] No Table of Contents found")
+            logger.info(
+                f"[{document_id}] No Table of Contents found "
+                f"in pages {scan_from}-{scan_end_abs}"
+            )
             return None
 
         toc_start, toc_end = toc_page_range
         self.toc_start_page = toc_start
+
+        # --- Step 1b: Verify/extend TOC end page ---
+        # The LLM often underestimates the TOC end. Scan forward
+        # page by page to find the true end.
+        toc_end = self._verify_toc_end(
+            pages_data, toc_start, toc_end, document_id
+        )
         self.toc_end_page = toc_end
         logger.info(
             f"[{document_id}] TOC found on absolute pages {toc_start}-{toc_end}"
@@ -109,11 +134,14 @@ class TOCDetector:
     # ------------------------------------------------------------------
 
     def _find_toc_pages(
-        self, scan_pages: List[Dict], document_id: str
+        self, scan_pages: List[Dict], document_id: str,
+        abs_offset: int = 1,
     ) -> Optional[Tuple[int, int]]:
         """
         Ask the LLM which (if any) of the scanned pages contain a
         Table of Contents. Returns (start_abs, end_abs) or None.
+
+        Uses image indices (1..N) and translates to absolute pages.
         """
         images = prepare_images_for_bedrock(scan_pages)
 
@@ -121,24 +149,25 @@ class TOCDetector:
         if len(images) > MAX_IMAGES_PER_BATCH:
             images = images[:MAX_IMAGES_PER_BATCH]
 
-        scan_end = len(images)
+        n_images = len(images)
 
         prompt = (
-            "Look at these document pages (absolute page 1 to "
-            f"{scan_end}).\n\n"
-            "TASK: Determine whether any of these pages contain a "
+            f"I am showing you {n_images} document page images.\n"
+            f"They are numbered Image 1 through Image {n_images}.\n\n"
+            "TASK: Determine whether any of these images contain a "
             "Table of Contents (TOC), Contents page, or similar listing "
             "of document sections with page numbers.\n\n"
-            "IMPORTANT: Use ABSOLUTE page position (the first image is page 1, "
-            "the second image is page 2, etc.), NOT the printed page numbers.\n\n"
+            "IMPORTANT: Use IMAGE NUMBERS (1 to "
+            f"{n_images}), NOT any page numbers printed on the document.\n"
+            "Ignore any page numbers you see printed on the pages.\n\n"
             "Return ONLY a JSON object:\n"
             "{\n"
             '  "has_toc": true or false,\n'
-            '  "toc_start_page": <absolute page number where TOC begins>,\n'
-            '  "toc_end_page": <absolute page number where TOC ends>\n'
+            f'  "toc_start_image": <image number 1-{n_images} where TOC begins>,\n'
+            f'  "toc_end_image": <image number 1-{n_images} where TOC ends>\n'
             "}\n\n"
             "If there is no TOC, return:\n"
-            '{"has_toc": false, "toc_start_page": null, "toc_end_page": null}\n\n'
+            '{"has_toc": false, "toc_start_image": null, "toc_end_image": null}\n\n'
             "Return valid JSON only, no markdown or extra text."
         )
 
@@ -153,16 +182,120 @@ class TOCDetector:
             if not data.get("has_toc", False):
                 return None
 
-            start = data.get("toc_start_page")
-            end = data.get("toc_end_page")
-            if start is None or end is None:
+            start_img = data.get("toc_start_image")
+            end_img = data.get("toc_end_image")
+            if start_img is None or end_img is None:
                 return None
 
-            return (int(start), int(end))
+            start_img = int(start_img)
+            end_img = int(end_img)
+
+            # Validate image range
+            if start_img < 1 or end_img > n_images or start_img > end_img:
+                logger.warning(
+                    f"[{document_id}] Invalid TOC image range "
+                    f"{start_img}-{end_img} (expected 1-{n_images})"
+                )
+                start_img = max(1, min(start_img, n_images))
+                end_img = max(start_img, min(end_img, n_images))
+
+            # Translate image indices to absolute page numbers
+            start_abs = start_img + abs_offset - 1
+            end_abs = end_img + abs_offset - 1
+
+            logger.info(
+                f"[{document_id}] TOC images {start_img}-{end_img} -> "
+                f"absolute pages {start_abs}-{end_abs}"
+            )
+
+            return (start_abs, end_abs)
 
         except Exception as e:
             logger.warning(f"[{document_id}] TOC page detection failed: {e}")
             return None
+
+    # ------------------------------------------------------------------
+    # Step 1b: Verify / extend the TOC end page
+    # ------------------------------------------------------------------
+
+    def _verify_toc_end(
+        self,
+        pages_data: List[Dict],
+        toc_start: int,
+        toc_end_estimate: int,
+        document_id: str,
+        max_extend: int = 5,
+    ) -> int:
+        """
+        Verify and extend the TOC end page.
+
+        The LLM often underestimates where the TOC ends. Check each
+        page after the estimated end to see if it's still a TOC page.
+
+        Args:
+            toc_start: Absolute page where TOC starts.
+            toc_end_estimate: LLM's estimate of where TOC ends.
+            max_extend: Maximum pages to check beyond the estimate.
+
+        Returns:
+            The true absolute end page of the TOC.
+        """
+        total = len(pages_data)
+        toc_end = toc_end_estimate
+
+        for abs_page in range(toc_end_estimate + 1,
+                              min(toc_end_estimate + max_extend + 1, total + 1)):
+            page_data = pages_data[abs_page - 1]
+            images = prepare_images_for_bedrock([page_data])
+
+            prompt = (
+                "I am showing you a single document page image.\n\n"
+                "QUESTION: Is this page a Table of Contents (TOC) page?\n\n"
+                "A TOC page contains a structured listing of section names "
+                "or headings with corresponding page numbers, often with "
+                "dot leaders (......) connecting the heading to the number.\n\n"
+                "Answer YES if this page:\n"
+                "- Lists section/chapter headings with page numbers\n"
+                "- Is a continuation of a TOC from a previous page\n"
+                "- Contains entries like 'Section Name ......... 12'\n\n"
+                "Answer NO if this page:\n"
+                "- Contains actual document content (clauses, paragraphs, text)\n"
+                "- Is a cover page, title page, or separator page\n"
+                "- Has no structured listing of sections with page numbers\n\n"
+                "Return ONLY a JSON object:\n"
+                '{"is_toc_page": true or false}'
+            )
+
+            try:
+                response = invoke_multimodal(
+                    images=images, prompt=prompt, max_tokens=64,
+                )
+                data = self._parse_json_object(response)
+
+                if data.get("is_toc_page", False):
+                    toc_end = abs_page
+                    logger.info(
+                        f"[{document_id}] Page {abs_page} is also a TOC page "
+                        f"(extending end from {toc_end_estimate})"
+                    )
+                else:
+                    # First non-TOC page — stop
+                    break
+
+            except Exception as e:
+                logger.warning(
+                    f"[{document_id}] TOC end check failed on page "
+                    f"{abs_page}: {e}"
+                )
+                break
+
+        if toc_end != toc_end_estimate:
+            logger.info(
+                f"[{document_id}] TOC end extended: "
+                f"{toc_end_estimate} -> {toc_end}"
+            )
+
+        return toc_end
 
     # ------------------------------------------------------------------
     # Step 2: Extract entries from TOC pages
@@ -249,7 +382,7 @@ class TOCDetector:
             response = invoke_multimodal(
                 images=images,
                 prompt=prompt,
-                max_tokens=MODEL_MAX_TOKENS_DETECTION,
+                max_tokens=4096,  # TOC extraction needs more tokens than detection
             )
             all_entries = self._parse_json_array(response)
 
@@ -310,7 +443,51 @@ class TOCDetector:
         if response.endswith("```"):
             response = response[:-3]
         response = response.strip()
+
+        # Try to parse the complete array first
         match = re.search(r"\[[\s\S]*\]", response)
         if match:
-            return json.loads(match.group(0))
-        raise ValueError(f"No JSON array found in response: {response[:200]}")
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError:
+                pass
+
+        # If that fails (truncated response), try to salvage complete
+        # JSON objects from the truncated array.
+        # Find the opening '[' and extract all complete {...} objects.
+        bracket_pos = response.find("[")
+        if bracket_pos == -1:
+            raise ValueError(
+                f"No JSON array found in response: {response[:200]}"
+            )
+
+        truncated = response[bracket_pos:]
+        salvaged = []
+        # Find each complete JSON object within the truncated array
+        depth = 0
+        obj_start = None
+        for i, ch in enumerate(truncated):
+            if ch == "{":
+                if depth == 0:
+                    obj_start = i
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0 and obj_start is not None:
+                    obj_str = truncated[obj_start : i + 1]
+                    try:
+                        salvaged.append(json.loads(obj_str))
+                    except json.JSONDecodeError:
+                        pass
+                    obj_start = None
+
+        if salvaged:
+            logger.warning(
+                f"JSON array was truncated. Salvaged {len(salvaged)} "
+                "complete entries."
+            )
+            return salvaged
+
+        raise ValueError(
+            f"No JSON array found in response: {response[:200]}"
+        )

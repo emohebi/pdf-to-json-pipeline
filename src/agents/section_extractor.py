@@ -2,6 +2,9 @@
 Stage 2: Section Extraction Agent - FULLY GENERIC.
 All prompts, section-specific behavior, and document classification
 are driven entirely by config.json. No hardcoded section types.
+
+Supports batch processing: sections with more than BATCH_SIZE pages
+are split into batches, extracted independently, and merged.
 """
 import json
 import re
@@ -21,6 +24,8 @@ from src.tools.bedrock_vision import prepare_images_for_bedrock
 from src.utils import setup_logger, StorageManager
 
 logger = setup_logger("section_extractor")
+
+BATCH_SIZE = 20
 
 
 # ============================================================================
@@ -62,24 +67,60 @@ def _check_dict_empty(data: Dict) -> bool:
     return empty > total * 0.5 if total else True
 
 
-def calculate_confidence_score(extracted: Any, section_type: str) -> Tuple[float, List[str]]:
+def calculate_confidence_score(
+    extracted: Any, section_type: str
+) -> Tuple[float, List[str]]:
     issues, conf = [], 1.0
     if extracted is None:
         return 0.0, ["No data"]
     if isinstance(extracted, list):
         if not extracted:
-            conf -= 0.3; issues.append("Empty array")
+            conf -= 0.3
+            issues.append("Empty array")
         else:
-            empty_n = sum(1 for it in extracted if isinstance(it, dict) and _check_dict_empty(it))
+            empty_n = sum(
+                1 for it in extracted
+                if isinstance(it, dict) and _check_dict_empty(it)
+            )
             if empty_n:
                 conf -= (empty_n / len(extracted)) * 0.2
                 issues.append(f"{empty_n}/{len(extracted)} items empty")
     elif isinstance(extracted, dict):
         if not extracted:
-            conf -= 0.3; issues.append("Empty object")
+            conf -= 0.3
+            issues.append("Empty object")
         elif _check_dict_empty(extracted):
-            conf -= 0.2; issues.append("Some fields empty")
+            conf -= 0.2
+            issues.append("Some fields empty")
     return max(0.0, min(1.0, conf)), issues
+
+
+def _deep_merge(base: Dict, overlay: Dict) -> Dict:
+    """
+    Deep-merge overlay into base.
+    - Lists are concatenated.
+    - Dicts are recursively merged.
+    - Scalars: overlay wins if base value is empty/None, otherwise
+      base is kept (first-batch priority for top-level fields like
+      titles and descriptions).
+    """
+    merged = dict(base)
+    for key, val in overlay.items():
+        if key not in merged:
+            merged[key] = val
+        elif isinstance(merged[key], list) and isinstance(val, list):
+            merged[key] = merged[key] + val
+        elif isinstance(merged[key], dict) and isinstance(val, dict):
+            merged[key] = _deep_merge(merged[key], val)
+        else:
+            # Keep base value if it's non-empty; otherwise take overlay
+            if (
+                merged[key] is None
+                or merged[key] == ""
+                or (isinstance(merged[key], str) and not merged[key].strip())
+            ):
+                merged[key] = val
+    return merged
 
 
 # ============================================================================
@@ -90,6 +131,9 @@ class SectionExtractionAgent:
     """
     Fully generic section extractor.
     Reads ALL prompts and section-specific behavior from config.json.
+
+    When a section spans more than BATCH_SIZE pages, the pages are
+    split into batches and extracted separately, then merged.
     """
 
     def __init__(self, section_schema: Dict):
@@ -114,30 +158,43 @@ class SectionExtractionAgent:
         section_name = section_info["section_name"]
         start_page = section_info["start_page"]
         end_page = section_info["end_page"]
+        total_pages = len(section_pages)
 
-        logger.info(f"[{document_id}] Extracting: {section_name} (pages {start_page}-{end_page})")
+        logger.info(
+            f"[{document_id}] Extracting: {section_name} "
+            f"(pages {start_page}-{end_page}, {total_pages} pages)"
+        )
+
         response = ""
         try:
-            images_b64 = prepare_images_for_bedrock(section_pages)
-
             # --- Document classification (config-driven) ---
             doc_type_guidance = ""
             if self._needs_classification(section_type):
-                doc_type = self._classify_document(images_b64, section_info, document_id)
+                # Classify using first batch of pages
+                cls_pages = section_pages[:BATCH_SIZE]
+                images_cls = prepare_images_for_bedrock(cls_pages)
+                doc_type = self._classify_document(
+                    images_cls, section_info, document_id
+                )
                 doc_type_guidance = self._get_type_guidance(doc_type)
 
-            # --- Build prompt ---
-            prompt = self._build_prompt(
-                section_info, next_section_name,
-                image_prompt_text, doc_type_guidance,
+            # --- Single batch or multi-batch ---
+            if total_pages <= BATCH_SIZE:
+                section_json = self._extract_single(
+                    section_pages, section_info,
+                    next_section_name, image_prompt_text,
+                    doc_type_guidance,
+                )
+            else:
+                section_json = self._extract_batched(
+                    section_pages, section_info,
+                    next_section_name, image_prompt_text,
+                    doc_type_guidance, document_id,
+                )
+
+            confidence, issues = calculate_confidence_score(
+                section_json, section_type
             )
-
-            # --- Invoke LLM ---
-            response = invoke_multimodal(images=images_b64, prompt=prompt, max_tokens=MODEL_MAX_TOKENS_EXTRACTION)
-            response = response.replace(" -- ", " - ")
-            section_json = self._parse(response)
-
-            confidence, issues = calculate_confidence_score(section_json, section_type)
             result = {
                 "section_name": section_name,
                 "page_range": [start_page, end_page],
@@ -148,14 +205,219 @@ class SectionExtractionAgent:
                     "quality_issues": issues,
                 },
             }
-            self.storage.save_section_json(document_id, section_name, result, confidence)
-            logger.info(f"[{document_id}] Extracted {section_name} (confidence: {confidence:.2f})")
+            self.storage.save_section_json(
+                document_id, section_name, result, confidence
+            )
+            logger.info(
+                f"[{document_id}] Extracted {section_name} "
+                f"(confidence: {confidence:.2f})"
+            )
             return result
 
         except Exception as e:
-            logger.error(f"[{document_id}] Failed: {section_name}: {e}")
-            logger.error(f"RESPONSE: {response[:500] if response else '<empty>'}")
+            logger.error(
+                f"[{document_id}] Failed: {section_name}: {e}"
+            )
+            logger.error(
+                f"RESPONSE: {response[:500] if response else '<empty>'}"
+            )
             raise
+
+    # ------------------------------------------------------------------
+    # Single-batch extraction (≤ BATCH_SIZE pages)
+    # ------------------------------------------------------------------
+
+    def _extract_single(
+        self,
+        section_pages: List[Dict],
+        section_info: Dict,
+        next_section_name: str,
+        image_prompt_text: str,
+        doc_type_guidance: str,
+    ) -> Union[Dict, List]:
+        """Extract a section in one LLM call."""
+        images_b64 = prepare_images_for_bedrock(section_pages)
+
+        prompt = self._build_prompt(
+            section_info, next_section_name,
+            image_prompt_text, doc_type_guidance,
+        )
+
+        response = invoke_multimodal(
+            images=images_b64, prompt=prompt,
+            max_tokens=MODEL_MAX_TOKENS_EXTRACTION,
+        )
+        response = response.replace(" -- ", " - ")
+        return self._parse(response)
+
+    # ------------------------------------------------------------------
+    # Multi-batch extraction (> BATCH_SIZE pages)
+    # ------------------------------------------------------------------
+
+    def _extract_batched(
+        self,
+        section_pages: List[Dict],
+        section_info: Dict,
+        next_section_name: str,
+        image_prompt_text: str,
+        doc_type_guidance: str,
+        document_id: str,
+    ) -> Union[Dict, List]:
+        """
+        Split section into batches of BATCH_SIZE pages, extract each
+        batch, and merge results.
+
+        Each batch receives context about:
+          - Which batch it is (N of M)
+          - Which absolute pages it covers
+          - The expected output schema (same for every batch)
+
+        Merge strategy:
+          - If results are lists → concatenate all lists
+          - If results are dicts → deep-merge (lists inside concatenated,
+            first-batch scalars take priority)
+        """
+        total_pages = len(section_pages)
+        start_page = section_info["start_page"]
+
+        # Build batches
+        batches = []
+        for i in range(0, total_pages, BATCH_SIZE):
+            batch_pages = section_pages[i : i + BATCH_SIZE]
+            batch_start = start_page + i
+            batch_end = batch_start + len(batch_pages) - 1
+            batches.append((batch_pages, batch_start, batch_end))
+
+        n_batches = len(batches)
+        logger.info(
+            f"[{document_id}] Splitting '{section_info['section_name']}' "
+            f"into {n_batches} batches of up to {BATCH_SIZE} pages"
+        )
+
+        batch_results: List[Union[Dict, List]] = []
+
+        for batch_idx, (batch_pages, b_start, b_end) in enumerate(
+            batches, 1
+        ):
+            logger.info(
+                f"[{document_id}]   Batch {batch_idx}/{n_batches}: "
+                f"pages {b_start}-{b_end} "
+                f"({len(batch_pages)} pages)"
+            )
+
+            # Build a batch-specific section_info with adjusted pages
+            batch_info = dict(section_info)
+            batch_info["start_page"] = b_start
+            batch_info["end_page"] = b_end
+
+            # Only the last batch mentions the next section name
+            batch_next = (
+                next_section_name
+                if batch_idx == n_batches
+                else ""
+            )
+
+            # Build batch context to prepend to the prompt
+            batch_context = (
+                f"\n\nBATCH PROCESSING CONTEXT:\n"
+                f"This section spans {total_pages} pages "
+                f"(pages {start_page}-{section_info['end_page']}).\n"
+                f"You are processing batch {batch_idx} of {n_batches} "
+                f"(pages {b_start}-{b_end}).\n"
+                f"Extract ONLY the content visible in the pages shown. "
+                f"Do NOT invent or assume content from other batches.\n"
+                f"Use the SAME output schema — your output will be "
+                f"merged with other batches.\n"
+            )
+
+            prompt = self._build_prompt(
+                batch_info, batch_next,
+                image_prompt_text, doc_type_guidance,
+            )
+            prompt += batch_context
+
+            images_b64 = prepare_images_for_bedrock(batch_pages)
+
+            try:
+                response = invoke_multimodal(
+                    images=images_b64, prompt=prompt,
+                    max_tokens=MODEL_MAX_TOKENS_EXTRACTION,
+                )
+                response = response.replace(" -- ", " - ")
+                batch_json = self._parse(response)
+                batch_results.append(batch_json)
+                logger.info(
+                    f"[{document_id}]   Batch {batch_idx} extracted OK"
+                )
+            except Exception as e:
+                logger.error(
+                    f"[{document_id}]   Batch {batch_idx} failed: {e}"
+                )
+                # Continue with other batches rather than failing entirely
+                continue
+
+        if not batch_results:
+            raise RuntimeError(
+                f"All {n_batches} batches failed for "
+                f"'{section_info['section_name']}'"
+            )
+
+        # Merge batch results
+        return self._merge_batch_results(batch_results, document_id)
+
+    def _merge_batch_results(
+        self,
+        results: List[Union[Dict, List]],
+        document_id: str,
+    ) -> Union[Dict, List]:
+        """
+        Merge results from multiple batches.
+
+        - All lists → concatenate
+        - All dicts → deep-merge (lists concatenated, first scalar wins)
+        - Mixed → wrap dicts as single-element lists, then concatenate
+        """
+        if not results:
+            return {}
+
+        # Check types
+        all_lists = all(isinstance(r, list) for r in results)
+        all_dicts = all(isinstance(r, dict) for r in results)
+
+        if all_lists:
+            merged = []
+            for r in results:
+                merged.extend(r)
+            logger.info(
+                f"[{document_id}] Merged {len(results)} batches "
+                f"(list concat): {len(merged)} items"
+            )
+            return merged
+
+        if all_dicts:
+            merged = {}
+            for r in results:
+                merged = _deep_merge(merged, r)
+            logger.info(
+                f"[{document_id}] Merged {len(results)} batches "
+                f"(dict deep-merge)"
+            )
+            return merged
+
+        # Mixed: normalize to lists and concatenate
+        merged = []
+        for r in results:
+            if isinstance(r, list):
+                merged.extend(r)
+            elif isinstance(r, dict):
+                merged.append(r)
+            else:
+                merged.append(r)
+        logger.info(
+            f"[{document_id}] Merged {len(results)} batches "
+            f"(mixed → list): {len(merged)} items"
+        )
+        return merged
 
     # ------------------------------------------------------------------
     # Document classification (entirely config-driven)
@@ -167,7 +429,10 @@ class SectionExtractionAgent:
             return False
         return section_type in self._cls_config.get("applies_to", [])
 
-    def _classify_document(self, images_b64: List[str], section_info: Dict, document_id: str) -> str:
+    def _classify_document(
+        self, images_b64: List[str], section_info: Dict,
+        document_id: str,
+    ) -> str:
         """Run document classification using the config-defined prompt."""
         types_cfg = self._cls_config.get("types", {})
         default_type = self._cls_config.get("default_type", "Unknown")
@@ -175,12 +440,17 @@ class SectionExtractionAgent:
         # Build type hints from config
         type_hints_parts = []
         for type_name, type_cfg in types_cfg.items():
-            type_hints_parts.append(f'- "{type_name}": {type_cfg.get("detection_hints", "")}')
+            type_hints_parts.append(
+                f'- "{type_name}": '
+                f'{type_cfg.get("detection_hints", "")}'
+            )
         type_hints = "\n".join(type_hints_parts)
         type_names = " / ".join(types_cfg.keys())
 
         # Render the classification prompt template
-        template = join_prompt(self._cls_config.get("prompt_template", []))
+        template = join_prompt(
+            self._cls_config.get("prompt_template", [])
+        )
         prompt = render_prompt(
             template,
             section_name=section_info["section_name"],
@@ -190,17 +460,25 @@ class SectionExtractionAgent:
             type_names=type_names,
         )
 
-        response = invoke_multimodal(images=images_b64, prompt=prompt, max_tokens=MODEL_MAX_TOKENS_EXTRACTION)
+        response = invoke_multimodal(
+            images=images_b64, prompt=prompt,
+            max_tokens=MODEL_MAX_TOKENS_EXTRACTION,
+        )
 
         # Match response to a configured type by keyword
         response_lower = response.lower().strip()
         for type_name, type_cfg in types_cfg.items():
             keyword = type_cfg.get("match_keyword", type_name.lower())
             if keyword in response_lower:
-                logger.info(f"[{document_id}] Classified as: {type_name}")
+                logger.info(
+                    f"[{document_id}] Classified as: {type_name}"
+                )
                 return type_name
 
-        logger.info(f"[{document_id}] Classification unclear, using default: {default_type}")
+        logger.info(
+            f"[{document_id}] Classification unclear, "
+            f"using default: {default_type}"
+        )
         return default_type
 
     def _get_type_guidance(self, doc_type: str) -> str:
@@ -272,9 +550,15 @@ def format_image_mapping_fallback(image_mappings: List[Dict]) -> str:
     lines = ["\n\nIMAGES IN THIS SECTION:", "-" * 60]
     for img in image_mappings:
         idx = img.get("sorted_index", img.get("index", 0))
-        lines.append(f"[{idx}] Page {img['page']}, {img['grid']} (Y:{img['y_percent']:.0f}%)")
+        lines.append(
+            f"[{idx}] Page {img['page']}, {img['grid']} "
+            f"(Y:{img['y_percent']:.0f}%)"
+        )
         lines.append(f"    Description: {img['description'][:50]}...")
         lines.append(f"    PATH: {img['path']}")
         lines.append("")
-    lines += ["-" * 60, "Match images by PAGE and POSITION, then copy exact PATH."]
+    lines += [
+        "-" * 60,
+        "Match images by PAGE and POSITION, then copy exact PATH.",
+    ]
     return "\n".join(lines)

@@ -46,17 +46,23 @@ class PageNumberResolver:
     PDF page indices.
     """
 
-    def __init__(self, pages_data: List[Dict], toc_abs_start: int = None):
+    def __init__(
+        self, pages_data: List[Dict],
+        toc_entries: List[Dict] = None,
+        toc_abs_start: int = None,
+        toc_abs_end: int = None,
+    ):
         """
         Args:
             pages_data: Page dicts from pdf_processor.extract_pages().
-            toc_abs_start: Absolute page number where the TOC begins
-                           (used to anchor the offset calculation).
+            toc_entries: TOC entries with section_name and printed_page.
+            toc_abs_start: Absolute page where the TOC begins.
+            toc_abs_end: Absolute page where the TOC ends.
         """
         self.total_pages = len(pages_data)
         self._offset: Optional[int] = None
         self._printed_to_absolute: Dict[int, int] = {}
-        self._build_mapping(pages_data, toc_abs_start)
+        self._build_mapping(pages_data, toc_entries, toc_abs_start, toc_abs_end)
 
     # ------------------------------------------------------------------
     # Public API
@@ -144,11 +150,16 @@ class PageNumberResolver:
         # Fourth pass: compute end_page
         for i in range(len(resolved) - 1):
             resolved[i]["end_page"] = resolved[i + 1]["start_page"] - 1
-        resolved[-1]["end_page"] = total_pages
+
+        # Last section: end_page left as None (unknown).
+        # The caller (section_detector) is responsible for determining
+        # where the last TOC section actually ends, rather than assuming
+        # it runs to the end of the document.
+        resolved[-1]["end_page"] = None
 
         # Safety
         for sec in resolved:
-            if sec["end_page"] < sec["start_page"]:
+            if sec["end_page"] is not None and sec["end_page"] < sec["start_page"]:
                 sec["end_page"] = sec["start_page"]
             sec.pop("_resolution_reliable", None)
 
@@ -207,108 +218,230 @@ class PageNumberResolver:
     # ------------------------------------------------------------------
 
     def _build_mapping(
-        self, pages_data: List[Dict], toc_abs_start: int = None
+        self,
+        pages_data: List[Dict],
+        toc_entries: List[Dict] = None,
+        toc_abs_start: int = None,
+        toc_abs_end: int = None,
     ):
         """
         Build printed -> absolute page mapping.
 
-        Strategy 1 (primary): Extract standalone page numbers from
-        footer/header text using STRICT matching (only lines that are
-        purely a number, no surrounding text). Compute a consensus
-        offset from these reliable matches.
+        Strategy 1 (primary): Use TOC entries as anchor points.
+            Search for each TOC heading in the extracted page text to
+            find its absolute page. Compute offset from verified matches.
 
-        Strategy 2 (fallback): If we know the TOC absolute page and
-        have TOC entries, we can derive the offset externally.
+        Strategy 2 (fallback): If no TOC entries provided, try strict
+            footer number extraction with consensus voting.
+
+        Strategy 3 (last resort): offset = 0.
         """
-        raw_mappings: List[Dict] = []  # {printed, absolute}
+        # --- Strategy 1: TOC heading search ---
+        if toc_entries:
+            offset = self._compute_offset_from_toc(
+                pages_data, toc_entries, toc_abs_start, toc_abs_end
+            )
+            if offset is not None:
+                self._offset = offset
+                logger.info(f"Page offset: {offset:+d} (from TOC heading search)")
+                return
 
+        # --- Strategy 2: Strict footer extraction ---
+        raw_mappings = []
         for page in pages_data:
             abs_idx = page["page_number"]
             text = page.get("text", "")
             if not text.strip():
                 continue
-
             printed = self._extract_printed_page_number_strict(text)
             if printed is not None and printed > 0:
                 raw_mappings.append({"printed": printed, "absolute": abs_idx})
                 if printed not in self._printed_to_absolute:
                     self._printed_to_absolute[printed] = abs_idx
 
-        # Compute consensus offset from the strict mappings
         if raw_mappings:
             offsets = [m["absolute"] - m["printed"] for m in raw_mappings]
             offset_counts = Counter(offsets)
             best_offset, count = offset_counts.most_common(1)[0]
-
-            # Accept if at least 30% of mappings agree on this offset
             agreement = count / len(raw_mappings)
-            if agreement >= 0.3:
+
+            if agreement >= 0.5:  # Raised threshold — need strong consensus
                 self._offset = best_offset
                 logger.info(
                     f"Page offset: {best_offset:+d} "
-                    f"(consensus from {count}/{len(raw_mappings)} pages, "
-                    f"{agreement:.0%} agreement)"
+                    f"(footer consensus: {count}/{len(raw_mappings)}, "
+                    f"{agreement:.0%})"
                 )
+                return
             else:
                 logger.warning(
-                    f"No consensus offset found. "
-                    f"Best: {best_offset:+d} with only {agreement:.0%} agreement. "
-                    f"Top offsets: {offset_counts.most_common(3)}"
+                    f"Footer extraction unreliable. "
+                    f"Best: {best_offset:+d} with {agreement:.0%} agreement. "
+                    f"Top: {offset_counts.most_common(3)}"
                 )
-        else:
-            logger.warning(
-                "No page numbers extracted from text. "
-                "Will use printed_page = absolute_page (offset 0)."
+
+        # --- Strategy 3: Assume offset 0 ---
+        self._offset = 0
+        logger.warning(
+            "Could not determine page offset. Using offset=0 "
+            "(printed page = absolute page)."
+        )
+
+    def _compute_offset_from_toc(
+        self,
+        pages_data: List[Dict],
+        toc_entries: List[Dict],
+        toc_abs_start: int = None,
+        toc_abs_end: int = None,
+    ) -> Optional[int]:
+        """
+        Compute the offset by searching for TOC heading text in pages.
+
+        For each TOC entry, search through extracted page text for
+        the section heading. Where found, offset = abs_page - printed_page.
+        Use consensus from multiple verified matches.
+        """
+        verified_offsets = []
+
+        # Use up to 5 entries for verification (first few are most reliable)
+        entries_to_check = toc_entries[:5]
+
+        for entry in entries_to_check:
+            heading = entry.get("section_name", "").strip()
+            printed = entry.get("printed_page")
+            if not heading or printed is None:
+                continue
+
+            # Normalise the heading for fuzzy matching
+            heading_norm = self._normalise_for_search(heading)
+            if len(heading_norm) < 3:
+                continue
+
+            # Search pages for this heading
+            found_page = self._find_heading_in_pages(
+                pages_data, heading_norm, printed,
+                toc_abs_start, toc_abs_end,
             )
-            self._offset = 0
+
+            if found_page is not None:
+                offset = found_page - printed
+                verified_offsets.append({
+                    "heading": heading,
+                    "printed": printed,
+                    "absolute": found_page,
+                    "offset": offset,
+                })
+                logger.info(
+                    f"  TOC anchor: '{heading}' printed={printed} -> "
+                    f"abs={found_page} (offset={offset:+d})"
+                )
+
+        if not verified_offsets:
+            logger.warning("Could not verify any TOC entries against page text")
+            return None
+
+        # Take consensus offset
+        offsets = [v["offset"] for v in verified_offsets]
+        offset_counts = Counter(offsets)
+        best_offset, count = offset_counts.most_common(1)[0]
 
         logger.info(
-            f"Page mapping: {len(self._printed_to_absolute)}/{self.total_pages} "
-            f"pages resolved, offset={self._offset}"
+            f"TOC-verified offset: {best_offset:+d} "
+            f"({count}/{len(verified_offsets)} entries agree)"
         )
+        return best_offset
+
+    def _find_heading_in_pages(
+        self,
+        pages_data: List[Dict],
+        heading_norm: str,
+        printed_page: int,
+        toc_abs_start: int = None,
+        toc_abs_end: int = None,
+    ) -> Optional[int]:
+        """
+        Search for a normalised heading string in page text.
+
+        Search strategy:
+          - Sections follow AFTER the TOC, so anchor the search at
+            toc_abs_end + printed_page (not toc_abs_start).
+          - Skip TOC pages themselves (they contain all heading text
+            as TOC entries and would give false matches).
+          - Search outward from the anchor.
+        """
+        # Pages to skip (TOC pages contain heading text as entries)
+        skip_pages = set()
+        if toc_abs_start is not None and toc_abs_end is not None:
+            for p in range(toc_abs_start, toc_abs_end + 1):
+                skip_pages.add(p)
+
+        # Anchor: sections start after the TOC ends
+        if toc_abs_end is not None:
+            anchor = toc_abs_end + printed_page
+        elif toc_abs_start is not None:
+            anchor = toc_abs_start + printed_page
+        else:
+            anchor = printed_page
+
+        # Clamp anchor to valid range
+        anchor = max(1, min(anchor, self.total_pages))
+
+        # Build search order: anchor, anchor+1, anchor-1, anchor+2, ...
+        search_order = []
+        for delta in range(0, 40):
+            page = anchor + delta
+            if 1 <= page <= self.total_pages and page not in skip_pages:
+                search_order.append(page)
+            if delta > 0:
+                page = anchor - delta
+                if 1 <= page <= self.total_pages and page not in skip_pages:
+                    search_order.append(page)
+
+        for abs_page in search_order:
+            page_data = pages_data[abs_page - 1]
+            text = page_data.get("text", "")
+            if not text:
+                continue
+
+            text_norm = self._normalise_for_search(text)
+            if heading_norm in text_norm:
+                return abs_page
+
+        return None
+
+    @staticmethod
+    def _normalise_for_search(text: str) -> str:
+        """Normalise text for fuzzy heading matching."""
+        # Lowercase, collapse whitespace, remove punctuation
+        text = text.lower()
+        text = re.sub(r'[^\w\s]', ' ', text)
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
 
     @staticmethod
     def _extract_printed_page_number_strict(text: str) -> Optional[int]:
         """
-        Extract the printed page number using STRICT matching.
+        Extract printed page number — VERY strict matching.
 
-        Only matches lines where the page number is essentially the
-        ONLY content on the line — a standalone number in a footer or
-        header, not a clause number embedded in a heading.
-
-        Matches:
-          "38"
-          " 38 "
-          "- 38 -"
-          "Page 38"
-          "38 of 120"
-
-        Does NOT match:
-          "12. Assignment"           (clause number)
-          "Section 5.3 Liability"    (section number)
-          "Table 12: Revenue"        (table number)
-          "submitted on 12 Jan 2024" (date)
+        Only matches lines that are purely a standalone number.
         """
         lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
         if not lines:
             return None
 
         candidates = []
-        # Footer (last 3 lines) — most common location
         for line in lines[-3:]:
             candidates.append(line)
-        # Header (first 3 lines)
         for line in lines[:3]:
             candidates.append(line)
 
         for candidate in candidates:
-            # STRICT: line is ONLY a number (with optional dashes/whitespace)
-            # e.g., "38", "- 38 -", "-- 38 --"
+            # Line is ONLY a number (with optional dashes/whitespace)
             m = re.match(r"^[-\s]*(\d{1,4})[-\s]*$", candidate)
             if m:
                 return int(m.group(1))
 
-            # "Page 38" or "page 38" (standalone, nothing else significant)
+            # "Page 38" standalone
             m = re.match(r"^page\s+(\d{1,4})\s*$", candidate, re.IGNORECASE)
             if m:
                 return int(m.group(1))
@@ -318,7 +451,7 @@ class PageNumberResolver:
             if m:
                 return int(m.group(1))
 
-            # Standalone Roman numeral (front matter, very short line)
+            # Standalone Roman numeral
             if len(candidate) <= 8:
                 cleaned = candidate.strip("- ")
                 roman_val = _roman_to_int(cleaned)
