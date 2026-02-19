@@ -235,6 +235,37 @@ RULES:
 - If new_section_starts is false, return "new_sections": []
 """
 
+POST_INTERRUPTION_CHECK_PROMPT = """\
+I am showing you 2 pages from a {doc_type} document.
+
+PAGE 1 (page {origin_page}): This is from the section "{section_name}".
+PAGE 2 (page {check_page}): This is the page I am asking about.
+
+Between these two pages there was a {interruption_type} (pages {int_start}-{int_end})
+which interrupted the document flow.
+
+TASK: Does page {check_page} CONTINUE the section "{section_name}" from
+page {origin_page}?
+
+It CONTINUES if:
+- The content on page {check_page} is about the SAME TOPIC as "{section_name}"
+- It reads as a logical continuation: more clauses, paragraphs, or details
+  that belong to "{section_name}"
+- The subject matter has NOT changed — it picks up where page {origin_page}
+  left off (or continues the same topic after the {interruption_type})
+
+It does NOT continue if:
+- A new and DIFFERENT topic or section heading appears
+- The content is clearly about a different subject
+- A new document part, schedule, or appendix begins
+
+Return ONLY valid JSON:
+{{
+  "continues_previous_section": true | false,
+  "reason": "<brief explanation>"
+}}
+"""
+
 # =====================================================================
 # Main Detector
 # =====================================================================
@@ -318,6 +349,7 @@ class SectionDetectionAgent:
         sections: List[Dict] = []
         current_page = 1
         claimed_pages: set = set()
+        last_content_section: Optional[Dict] = None  # track last section before TOC/cover/blank
 
         while current_page <= total:
             if current_page in claimed_pages:
@@ -376,6 +408,73 @@ class SectionDetectionAgent:
                 logger.info(
                     f"[{document_id}]   Pages {current_page}-{end_page}"
                 )
+
+                # --- Post-interruption continuation check ---
+                # If we just finished a TOC/cover/blank and there was
+                # a content section before it, check if the page after
+                # continues that previous section.
+                if (
+                    page_type in ("cover_page", "toc_page", "blank_page")
+                    and last_content_section is not None
+                    and end_page + 1 <= total
+                ):
+                    prev_sec = last_content_section
+                    post_page = end_page + 1
+
+                    logger.info(
+                        f"[{document_id}]   Checking if page {post_page} "
+                        f"continues '{prev_sec['section_name']}' "
+                        f"after {name}"
+                    )
+
+                    continues = self._check_post_interruption_continuation(
+                        pages_data,
+                        prev_sec, post_page,
+                        interruption_type=name,
+                        int_start=current_page,
+                        int_end=end_page,
+                    )
+
+                    if continues:
+                        logger.info(
+                            f"[{document_id}]   YES — resuming "
+                            f"'{prev_sec['section_name']}' "
+                            f"from page {post_page}"
+                        )
+
+                        # Resume tracing from post_page onward
+                        # (continuation already confirmed, just find
+                        # where this resumed section ends)
+                        resume_end, resume_next, resume_shared = (
+                            self._trace_section(
+                                pages_data, post_page,
+                                prev_sec["section_name"],
+                                prev_sec["section_type"],
+                                total, document_id,
+                            )
+                        )
+
+                        # Extend the previous section's end page
+                        prev_sec["end_page"] = resume_end
+                        for p in range(post_page, resume_end + 1):
+                            claimed_pages.add(p)
+
+                        logger.info(
+                            f"[{document_id}]   Extended "
+                            f"'{prev_sec['section_name']}' to "
+                            f"page {resume_end}"
+                        )
+
+                        end_page = resume_end
+
+                # Track last content section for post-interruption checks
+                if page_type == "section_start":
+                    last_content_section = sections[-1]
+                elif page_type in ("cover_page", "toc_page"):
+                    # Don't clear on blank — a blank page between
+                    # TOC and continuation shouldn't reset tracking
+                    pass
+
                 current_page = end_page
 
         # Post-process: merge adjacent same-type sections
@@ -600,6 +699,67 @@ class SectionDetectionAgent:
                 "new_section_starts": False,
                 "new_sections": [],
             }
+
+    # ==================================================================
+    # Post-interruption continuation check
+    # ==================================================================
+
+    def _check_post_interruption_continuation(
+        self,
+        pages_data: List[Dict],
+        prev_section: Dict,
+        post_page: int,
+        interruption_type: str,
+        int_start: int,
+        int_end: int,
+    ) -> bool:
+        """
+        After a TOC/cover/blank interruption, check if the page right
+        after it continues the section that was active before the
+        interruption.
+
+        Shows the LLM two pages:
+          1. The last page of the previous section (origin context)
+          2. The page right after the interruption (check page)
+
+        Returns True if the post-interruption page continues the
+        previous section.
+        """
+        origin_page = prev_section["end_page"]
+        window = [
+            pages_data[origin_page - 1],
+            pages_data[post_page - 1],
+        ]
+        images = prepare_images_for_bedrock(window)
+
+        prompt = POST_INTERRUPTION_CHECK_PROMPT.format(
+            doc_type=get_document_type_name(),
+            section_name=prev_section["section_name"],
+            origin_page=origin_page,
+            check_page=post_page,
+            interruption_type=interruption_type,
+            int_start=int_start,
+            int_end=int_end,
+        )
+
+        try:
+            resp = invoke_multimodal(
+                images=images, prompt=prompt, max_tokens=128,
+            )
+            data = self._parse_json(resp)
+            continues = data.get("continues_previous_section", False)
+
+            logger.debug(
+                f"  Post-interruption check page {post_page}: "
+                f"continues={continues} ({data.get('reason', '')})"
+            )
+            return continues
+
+        except Exception as e:
+            logger.warning(
+                f"Post-interruption check failed page {post_page}: {e}"
+            )
+            return False
 
     # ==================================================================
     # Merge adjacent same-type sections
