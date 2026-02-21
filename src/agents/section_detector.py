@@ -74,7 +74,10 @@ CONDITIONS", "SCHEDULE 1 - SCOPE OF WORK") or a specific topic
 HOW TO IDENTIFY A SECTION START:
 Look for a prominent heading or title that introduces a DIFFERENT TOPIC
 from what came before. The heading usually stands out visually (bold,
-larger font, centered, or preceded by whitespace).
+larger font, centered, or preceded by whitespace). However, a TOP LEVEL
+TITLE that appears above a numbered heading may be less visually bold
+than the numbered heading below it — prefer the top-level title as the
+section name in that case (see CRITICAL note below).
 
 DO NOT report as section_start:
 - Clauses, sub-clauses, or paragraphs that continue the SAME TOPIC
@@ -86,10 +89,18 @@ DO NOT report as section_start:
 - Heading under or related to a top level section name
 
 CRITICAL:
-If you see a TOP Level title for the section pick it as the section name.
+If you see a TOP LEVEL TITLE above a numbered heading, always pick the
+TOP LEVEL TITLE as the section name — even if its font size is smaller
+or the same as the numbered heading below it. Position on the page
+(higher up, more isolated, visually separate) takes priority over font
+size when identifying the section name.
+
 Example:
-                [TOP LEVEL TITLE] --> (pick this one as SECTION NAME)
-    [1  INTRODUCTION] --> (NOT a SECTION)
+                [TOP LEVEL TITLE] --> (pick this one as SECTION NAME
+                                       even if the font size is smaller
+                                       or same as below headings)
+    [1  INTRODUCTION] --> (NOT a SECTION, just a sub-heading beneath
+                           the top level title above)
 
 {heading_alias_rules}
 

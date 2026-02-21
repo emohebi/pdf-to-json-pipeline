@@ -20,6 +20,7 @@ from src.agents import ValidationAgentDocuPorter, ReviewAgent
 from src.tools.bedrock_vision import prepare_images_for_bedrock
 from src.utils import StorageManager, setup_logger
 from src.utils.pdf_processor import extract_pages
+from src.agents.document_header_extractor import DocumentHeaderExtractor
 
 logger = setup_logger("pipeline")
 
@@ -96,7 +97,8 @@ def process_document(
                 f"'{sec['section_name']}' "
                 f"pp {sec['start_page']}-{sec['end_page']}"
             )
-
+        header_extractor = DocumentHeaderExtractor()
+        header = header_extractor.extract_header(pages_data[0], document_id)
         # ── 3. Extract sections ────────────────────────────────
         if PARALLEL:
             logger.info("STAGE 3: Extracting sections (PARALLEL)...")
@@ -126,7 +128,7 @@ def process_document(
             "total_pages": len(pages_data),
         }
         document_json, metadata = validator.validate_and_combine(
-            None, section_jsons, metadata, document_id
+            header, section_jsons, metadata, document_id
         )
 
         elapsed = time.time() - start_time

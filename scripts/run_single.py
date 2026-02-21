@@ -49,7 +49,7 @@ def main():
     )
     args = parser.parse_args()
     args.config = None
-    args.sections_json = "./output/20260219_222411/intermediate/detection/C1.101_PBC_RTP_Deed_of_Settlement_and_Restatement_-_final_execution_version_comb_detection.json"
+    args.sections_json = None# "./output/20260219_222411/intermediate/detection/C1.101_PBC_RTP_Deed_of_Settlement_and_Restatement_-_final_execution_version_comb_detection.json"
     # Apply overrides before loading config
     if args.config:
         os.environ["PIPELINE_CONFIG"] = args.config
