@@ -11,6 +11,7 @@ load_dotenv()
 from config.config_loader import (
     load_config, get_input_config, get_task_config, get_output_config,
     get_provider_name, get_model_params, get_processing_config, get_confidence_config,
+    is_term_matching_enabled, is_effective_date_enabled,
 )
 
 try:
@@ -39,7 +40,9 @@ DETECTION_DIR = INTERMEDIATE_DIR / "detection"
 SECTIONS_DIR = INTERMEDIATE_DIR / "sections"
 VALIDATION_QUEUE_DIR = INTERMEDIATE_DIR / "validation_queue"
 IMG_DESC_DIR = INTERMEDIATE_DIR / "image_description"
-for d in (DETECTION_DIR, SECTIONS_DIR, VALIDATION_QUEUE_DIR, IMG_DESC_DIR):
+TERM_MATCHING_DIR = INTERMEDIATE_DIR / "term_matching"
+EFFECTIVE_DATE_DIR = INTERMEDIATE_DIR / "effective_date"
+for d in (DETECTION_DIR, SECTIONS_DIR, VALIDATION_QUEUE_DIR, IMG_DESC_DIR, TERM_MATCHING_DIR, EFFECTIVE_DATE_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 PDF_INPUT_DIR = Path(_input.get("pdf_directory", "./input"))
@@ -69,6 +72,12 @@ BATCH_SIZE = int(os.getenv("BATCH_SIZE", _proc.get("batch_size", 100)))
 PARALLEL = _proc.get("parallel", False)
 REVIEW_ENABLED = _proc.get("review", False)
 MAX_IMAGES_PER_BATCH = _proc.get("max_images_per_batch", 20)
+
+# Term matching (optional step)
+TERM_MATCHING_ENABLED = is_term_matching_enabled()
+
+# Effective date extraction (optional step)
+EFFECTIVE_DATE_ENABLED = is_effective_date_enabled()
 
 MODEL_TEMPERATURE = _mp.get("temperature", 0)
 MODEL_MAX_TOKENS_DETECTION = _mp.get("max_tokens_detection", 4096)

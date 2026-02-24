@@ -9,6 +9,7 @@ Usage:
     python scripts/run_single.py --provider azure_openai
     python scripts/run_single.py --config ./my_config.json
     python scripts/run_single.py --review
+    python scripts/run_single.py --term-match
 """
 import argparse
 import json
@@ -47,9 +48,26 @@ def main():
     parser.add_argument(
         "--no-review", action="store_true", help="Disable review stage"
     )
+    parser.add_argument(
+        "--term-match", action="store_true",
+        help="Enable term matching stage (overrides config)"
+    )
+    parser.add_argument(
+        "--no-term-match", action="store_true",
+        help="Disable term matching stage (overrides config)"
+    )
+    parser.add_argument(
+        "--effective-date", action="store_true",
+        help="Enable effective date extraction (overrides config)"
+    )
+    parser.add_argument(
+        "--no-effective-date", action="store_true",
+        help="Disable effective date extraction (overrides config)"
+    )
     args = parser.parse_args()
     args.config = None
-    args.sections_json = None# "./output/20260219_222411/intermediate/detection/C1.101_PBC_RTP_Deed_of_Settlement_and_Restatement_-_final_execution_version_comb_detection.json"
+    args.sections_json = None
+
     # Apply overrides before loading config
     if args.config:
         os.environ["PIPELINE_CONFIG"] = args.config
@@ -66,12 +84,24 @@ def main():
     elif args.no_review:
         settings.REVIEW_ENABLED = False
 
+    if args.term_match:
+        settings.TERM_MATCHING_ENABLED = True
+    elif args.no_term_match:
+        settings.TERM_MATCHING_ENABLED = False
+
+    if args.effective_date:
+        settings.EFFECTIVE_DATE_ENABLED = True
+    elif args.no_effective_date:
+        settings.EFFECTIVE_DATE_ENABLED = False
+
     from src.pipeline import process_document
 
     print("Pipeline Configuration:")
     print(f"  Provider: {settings.PROVIDER_NAME}")
     print(f"  Document type: {get_document_type_name()}")
     print(f"  Review: {settings.REVIEW_ENABLED}")
+    print(f"  Term Matching: {settings.TERM_MATCHING_ENABLED}")
+    print(f"  Effective Date: {settings.EFFECTIVE_DATE_ENABLED}")
     print(f"  Output: {settings.OUTPUT_DIR}")
     if args.sections_json:
         print(f"  Sections JSON: {args.sections_json} (detection SKIPPED)")

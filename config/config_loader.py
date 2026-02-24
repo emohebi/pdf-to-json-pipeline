@@ -143,6 +143,33 @@ def get_document_classification_config() -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Term matching (config-driven, optional)
+# ---------------------------------------------------------------------------
+
+def get_term_matching_config() -> Dict[str, Any]:
+    """Return the TASK.term_matching config block."""
+    return get_task_config().get("term_matching", {})
+
+def is_term_matching_enabled() -> bool:
+    """Check if term matching is enabled in config."""
+    cfg = get_term_matching_config()
+    return cfg.get("enabled", False) and bool(cfg.get("terms"))
+
+
+# ---------------------------------------------------------------------------
+# Effective date extraction (config-driven, optional)
+# ---------------------------------------------------------------------------
+
+def get_effective_date_config() -> Dict[str, Any]:
+    """Return the TASK.effective_date config block."""
+    return get_task_config().get("effective_date", {})
+
+def is_effective_date_enabled() -> bool:
+    """Check if effective date extraction is enabled in config."""
+    return get_effective_date_config().get("enabled", False)
+
+
+# ---------------------------------------------------------------------------
 # Prompts
 # ---------------------------------------------------------------------------
 

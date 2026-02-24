@@ -12,11 +12,12 @@ from typing import Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from config.settings import (
-    PARALLEL, MAX_WORKERS, REVIEW_ENABLED,
+    PARALLEL, MAX_WORKERS, REVIEW_ENABLED, TERM_MATCHING_ENABLED,
 )
 from config.schemas_docuporter import get_section_schema
 from src.agents import SectionDetectionAgent, SectionExtractionAgent
 from src.agents import ValidationAgentDocuPorter, ReviewAgent
+from src.agents.term_matcher import TermMatchingAgent
 from src.tools.bedrock_vision import prepare_images_for_bedrock
 from src.utils import StorageManager, setup_logger
 from src.utils.pdf_processor import extract_pages
@@ -30,7 +31,7 @@ def process_document(
     precomputed_sections: Optional[List[Dict]] = None,
 ) -> Optional[Dict]:
     """
-    Full pipeline: PDF → detect sections → extract → review → validate.
+    Full pipeline: PDF → detect sections → extract → term match → review → validate.
 
     Args:
         pdf_path: Path to the PDF file.
@@ -112,6 +113,17 @@ def process_document(
             )
         logger.info(f"  {len(section_jsons)} sections extracted")
 
+        # ── 3.5 (optional) Term matching ───────────────────────
+        term_matching_report = None
+        if TERM_MATCHING_ENABLED:
+            logger.info("STAGE 3.5: Term matching...")
+            matcher = TermMatchingAgent()
+            term_matching_report = matcher.match_terms(
+                section_jsons, document_id
+            )
+        else:
+            logger.info("STAGE 3.5: Term matching SKIPPED (disabled)")
+
         # ── 4. Optional review ─────────────────────────────────
         if REVIEW_ENABLED:
             logger.info("STAGE 4: Reviewing...")
@@ -127,6 +139,19 @@ def process_document(
             "source_file": str(pdf_path),
             "total_pages": len(pages_data),
         }
+
+        # Include term matching summary in metadata if available
+        if term_matching_report is not None:
+            total_terms = len(term_matching_report.get("terms", {}))
+            unmatched = len(term_matching_report.get("unmatched_terms", []))
+            metadata["term_matching"] = {
+                "total_terms": total_terms,
+                "matched_terms": total_terms - unmatched,
+                "unmatched_terms": term_matching_report.get(
+                    "unmatched_terms", []
+                ),
+            }
+
         document_json, metadata = validator.validate_and_combine(
             header, section_jsons, metadata, document_id
         )

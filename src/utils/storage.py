@@ -55,13 +55,16 @@ class StorageManager:
     def __init__(self):
         from config.settings import (
             DETECTION_DIR, SECTIONS_DIR, FINAL_DIR,
-            INTERMEDIATE_DIR, SAVE_INTERMEDIATES,
+            INTERMEDIATE_DIR, SAVE_INTERMEDIATES, TERM_MATCHING_DIR,
+            EFFECTIVE_DATE_DIR,
         )
         self.detection_dir = DETECTION_DIR
         self.sections_dir = SECTIONS_DIR
         self.final_dir = FINAL_DIR
         self.intermediate_dir = INTERMEDIATE_DIR
         self.save_intermediates = SAVE_INTERMEDIATES
+        self.term_matching_dir = TERM_MATCHING_DIR
+        self.effective_date_dir = EFFECTIVE_DATE_DIR
 
     def save_detection_result(self, document_id: str, sections: Any):
         if not self.save_intermediates or sections is None:
@@ -85,6 +88,18 @@ class StorageManager:
             return
         path = _make_safe_path(self.intermediate_dir, document_id, "review")
         self._write_json(path, results)
+
+    def save_term_matching_result(self, document_id: str, report: Dict):
+        """Save term matching report to the term_matching intermediate dir."""
+        path = _make_safe_path(self.term_matching_dir, document_id, "term_matching")
+        self._write_json(path, report)
+        logger.info(f"Saved term matching report: {path}")
+
+    def save_effective_date_result(self, document_id: str, report: Dict):
+        """Save effective date report to the effective_date intermediate dir."""
+        path = _make_safe_path(self.effective_date_dir, document_id, "effective_date")
+        self._write_json(path, report)
+        logger.info(f"Saved effective date report: {path}")
 
     def save_plain_text(self, document_id: str, text: str):
         if not self.save_intermediates:
