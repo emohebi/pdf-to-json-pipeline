@@ -56,7 +56,7 @@ class StorageManager:
         from config.settings import (
             DETECTION_DIR, SECTIONS_DIR, FINAL_DIR,
             INTERMEDIATE_DIR, SAVE_INTERMEDIATES, TERM_MATCHING_DIR,
-            EFFECTIVE_DATE_DIR,
+            EFFECTIVE_DATE_DIR, UOM_EXTRACTION_DIR,
         )
         self.detection_dir = DETECTION_DIR
         self.sections_dir = SECTIONS_DIR
@@ -65,6 +65,7 @@ class StorageManager:
         self.save_intermediates = SAVE_INTERMEDIATES
         self.term_matching_dir = TERM_MATCHING_DIR
         self.effective_date_dir = EFFECTIVE_DATE_DIR
+        self.uom_extraction_dir = UOM_EXTRACTION_DIR
 
     def save_detection_result(self, document_id: str, sections: Any):
         if not self.save_intermediates or sections is None:
@@ -100,6 +101,12 @@ class StorageManager:
         path = _make_safe_path(self.effective_date_dir, document_id, "effective_date")
         self._write_json(path, report)
         logger.info(f"Saved effective date report: {path}")
+
+    def save_uom_extraction_result(self, document_id: str, report: Dict):
+        """Save UOM extraction report to the uom_extraction intermediate dir."""
+        path = _make_safe_path(self.uom_extraction_dir, document_id, "uom_extraction")
+        self._write_json(path, report)
+        logger.info(f"Saved UOM extraction report: {path}")
 
     def save_plain_text(self, document_id: str, text: str):
         if not self.save_intermediates:

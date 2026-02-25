@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Run effective date extraction as a standalone step against an
+Run unit of measure extraction as a standalone step against an
 already-extracted document JSON (the final output from the pipeline).
 
-Reads the assembled document, reconstructs section representations
-and header info, then feeds them to EffectiveDateExtractor.
+Reads the assembled document, reconstructs section representations,
+then feeds them to UOMExtractor.
 
 Usage:
-    python scripts/effective_date_run.py --input ./output/final/my_doc.json
-    python scripts/effective_date_run.py --input ./output.json --output ./dates.json
-    python scripts/effective_date_run.py --input ./output.json --provider azure_openai
+    python scripts/uom_extraction_run.py --input ./output/final/my_doc.json
+    python scripts/uom_extraction_run.py --input ./output.json --output ./uom_report.json
+    python scripts/uom_extraction_run.py --input ./output.json --provider azure_openai
 """
 import argparse
 import json
@@ -23,7 +23,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # ====================================================================
 # Reconstruct sections from the final assembled document
-# (shared logic with term_matcher_run.py)
 # ====================================================================
 
 def _reconstruct_sections_from_document(document: Dict) -> List[Dict]:
@@ -80,7 +79,7 @@ def _derive_section_name(data: Any, fallback_type: str) -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Extract effective date from an extracted document JSON"
+        description="Extract units of measure from an extracted document JSON"
     )
     # parser.add_argument(
     #     "--input", "-i", required=True,
@@ -88,7 +87,7 @@ def main():
     # )
     parser.add_argument(
         "--output", "-o",
-        help="Path to write the effective date report. "
+        help="Path to write the UOM report. "
              "If omitted, saves to the default intermediate directory.",
     )
     parser.add_argument(
@@ -105,7 +104,7 @@ def main():
 
     from config.config_loader import load_config
     from config import settings
-    from src.agents.effective_date_extractor import EffectiveDateExtractor
+    from src.agents.uom_extractor import UOMExtractor
     args.input = "./output/20260224_234604/final/Amended_and_Restated_GPSFA_KPMG_Fully_Executed_151221_2.json"
     # --- Load the document JSON ---
     input_path = Path(args.input)
@@ -133,37 +132,24 @@ def main():
         print("ERROR: No sections found in the document JSON")
         sys.exit(1)
 
-    # --- Extract header ---
-    document_header = document.get("document_header", {})
-
     print(f"Document: {document_id}")
     print(f"Sections found: {len(section_jsons)}")
     for s in section_jsons:
         stype = s.get("_metadata", {}).get("section_type", "?")
         print(f"  [{stype}] {s['section_name']}")
 
-    # Show header date if present
-    header_date = document_header.get("date", {})
-    if isinstance(header_date, dict):
-        header_date = header_date.get("text", "")
-    if header_date:
-        print(f"\nHeader date: {header_date}")
-
     print(f"Provider: {settings.PROVIDER_NAME}")
     print()
 
     # --- Force-enable for standalone run ---
-    settings.EFFECTIVE_DATE_ENABLED = True
+    settings.UOM_EXTRACTION_ENABLED = True
 
     # --- Run extraction ---
-    extractor = EffectiveDateExtractor()
-    report = extractor.extract_effective_date(
-        section_jsons, document_id,
-        document_header=document_header,
-    )
+    extractor = UOMExtractor()
+    report = extractor.extract_uom(section_jsons, document_id)
 
     if report is None:
-        print("ERROR: Effective date extraction returned no results")
+        print("ERROR: UOM extraction returned no results")
         sys.exit(1)
 
     # --- Save if custom output path ---
@@ -178,48 +164,48 @@ def main():
 
     # --- Print summary ---
     print(f"\n{'=' * 60}")
-    print("EFFECTIVE DATE EXTRACTION RESULTS")
+    print("UNIT OF MEASURE EXTRACTION RESULTS")
     print(f"{'=' * 60}")
 
-    primary = report.get("primary_effective_date", {})
-    no_date = report.get("no_date_found", True)
+    no_uom = report.get("no_uom_found", True)
+    uoms = report.get("units_of_measure", [])
+    distinct = report.get("distinct_units", [])
 
-    if no_date or not primary.get("date"):
-        print("\n  No effective date could be identified.")
+    if no_uom or not uoms:
+        print("\n  No units of measure found in this document.")
     else:
-        print(f"\n  PRIMARY EFFECTIVE DATE:")
-        print(f"    Date:       {primary.get('date', '?')}")
-        normalised = primary.get("normalised", "")
-        if normalised:
-            print(f"    Normalised: {normalised}")
-        print(f"    Type:       {primary.get('date_type', '?')}")
-        print(f"    Source:     {primary.get('source_section', '?')}")
-        print(f"    Confidence: {primary.get('confidence', '?')}")
-        reason = primary.get("reason", "")
-        if reason:
-            print(f"    Reason:     {reason}")
+        print(f"\n  DISTINCT UNITS: {', '.join(distinct)}")
+        print(f"  TOTAL REFERENCES: {len(uoms)}")
+        print()
 
-    all_dates = report.get("all_dates_found", [])
-    if all_dates and len(all_dates) > 1:
-        print(f"\n  ALL CANDIDATE DATES ({len(all_dates)}):")
-        for i, d in enumerate(all_dates, 1):
-            conf = d.get("confidence", "?")
-            dtype = d.get("date_type", "?")
-            src = d.get("source_section", "?")
-            date_str = d.get("date", "?")
-            normalised = d.get("normalised", "")
-            reason = d.get("reason", "")
+        # Group by normalised unit for display
+        grouped: Dict[str, List[Dict]] = {}
+        for u in uoms:
+            norm = u.get("normalised_unit", u.get("unit", "?")).lower()
+            grouped.setdefault(norm, []).append(u)
 
-            label = f"{date_str}"
-            if normalised:
-                label += f" ({normalised})"
+        for norm_unit, entries in grouped.items():
+            print(f"  {norm_unit.upper()} ({len(entries)} reference(s))")
+            for e in entries:
+                conf = e.get("confidence", "?")
+                src = e.get("source_section", "?")
+                applies = e.get("applies_to", "")
+                verbatim = e.get("verbatim_text", "")
 
-            print(f"    {i}. [{conf:>6}] {label}")
-            print(f"              Type: {dtype} | Section: {src}")
-            if reason:
-                print(f"              {reason}")
+                print(f"    [{conf:>6}] Section: {src}")
+                if applies:
+                    print(f"             Applies to: {applies}")
+                if verbatim:
+                    print(f"             Verbatim: \"{verbatim}\"")
+            print()
 
-    print(f"\n{'=' * 60}")
+    print(f"{'=' * 60}")
+    print(
+        f"Distinct units: {len(distinct)}  |  "
+        f"Total references: {len(uoms)}  |  "
+        f"Sections analysed: {len(section_jsons)}"
+    )
+    print(f"{'=' * 60}")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ All configuration from config.json -- no hardcoded values.
 Usage:
     python scripts/run_single.py --pdf ./document.pdf
     python scripts/run_single.py --pdf ./document.pdf --sections-json ./sections.json
+    python scripts/run_single.py --pdf ./document.pdf --pages 5-20
     python scripts/run_single.py --provider azure_openai
     python scripts/run_single.py --config ./my_config.json
     python scripts/run_single.py --review
@@ -19,6 +20,25 @@ from pathlib import Path
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+def parse_page_range(page_range_str: str):
+    """
+    Parse a page range string like '5-20' into a (start, end) tuple (1-based, inclusive).
+    Also supports single page like '5' (returns (5, 5)).
+    """
+    if not page_range_str:
+        return None
+    page_range_str = page_range_str.strip()
+    if '-' in page_range_str:
+        parts = page_range_str.split('-', 1)
+        start = int(parts[0].strip())
+        end = int(parts[1].strip())
+    else:
+        start = end = int(page_range_str)
+    if start < 1 or end < start:
+        raise ValueError(f"Invalid page range: {page_range_str} (must be start-end with start >= 1)")
+    return (start, end)
 
 
 def main():
@@ -36,6 +56,11 @@ def main():
         help="Path to a section detection JSON file. "
              "If provided, section detection is skipped and this "
              "file is used directly as the section map.",
+    )
+    parser.add_argument(
+        "--pages",
+        help="Page range to extract, e.g. '5-20' or '10'. "
+             "1-based, inclusive. If omitted, all pages are processed.",
     )
     parser.add_argument(
         "--provider",
@@ -67,6 +92,15 @@ def main():
     args = parser.parse_args()
     args.config = None
     args.sections_json = None
+    args.pages = "1-131"
+    # Parse page range
+    page_range = None
+    if args.pages:
+        try:
+            page_range = parse_page_range(args.pages)
+        except ValueError as e:
+            print(f"ERROR: {e}")
+            sys.exit(1)
 
     # Apply overrides before loading config
     if args.config:
@@ -103,6 +137,8 @@ def main():
     print(f"  Term Matching: {settings.TERM_MATCHING_ENABLED}")
     print(f"  Effective Date: {settings.EFFECTIVE_DATE_ENABLED}")
     print(f"  Output: {settings.OUTPUT_DIR}")
+    if page_range:
+        print(f"  Page range: {page_range[0]}-{page_range[1]}")
     if args.sections_json:
         print(f"  Sections JSON: {args.sections_json} (detection SKIPPED)")
     print()
@@ -140,6 +176,7 @@ def main():
         result = process_document(
             str(pdf_path),
             precomputed_sections=precomputed_sections,
+            page_range=page_range,
         )
         if result:
             print(f"SUCCESS: {pdf_path.name}")
@@ -169,7 +206,11 @@ def main():
         for pdf_path in sorted(pdfs):
             print(f"\nProcessing: {pdf_path.name}")
             try:
-                result = process_document(str(pdf_path), precomputed_sections=precomputed_sections)
+                result = process_document(
+                    str(pdf_path),
+                    precomputed_sections=precomputed_sections,
+                    page_range=page_range,
+                )
                 status = "SUCCESS" if result else "FAILED"
                 print(f"  {status}: {pdf_path.name}")
             except Exception as e:

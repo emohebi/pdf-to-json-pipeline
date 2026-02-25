@@ -8,16 +8,19 @@ Supports precomputed section detection results via the
 import json
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from config.settings import (
     PARALLEL, MAX_WORKERS, REVIEW_ENABLED, TERM_MATCHING_ENABLED,
+    EFFECTIVE_DATE_ENABLED, UOM_EXTRACTION_ENABLED,
 )
 from config.schemas_docuporter import get_section_schema
 from src.agents import SectionDetectionAgent, SectionExtractionAgent
 from src.agents import ValidationAgentDocuPorter, ReviewAgent
 from src.agents.term_matcher import TermMatchingAgent
+from src.agents.effective_date_extractor import EffectiveDateExtractor
+from src.agents.uom_extractor import UOMExtractor
 from src.tools.bedrock_vision import prepare_images_for_bedrock
 from src.utils import StorageManager, setup_logger
 from src.utils.pdf_processor import extract_pages
@@ -29,6 +32,7 @@ logger = setup_logger("pipeline")
 def process_document(
     pdf_path: str,
     precomputed_sections: Optional[List[Dict]] = None,
+    page_range: Optional[Tuple[int, int]] = None,
 ) -> Optional[Dict]:
     """
     Full pipeline: PDF → detect sections → extract → term match → review → validate.
@@ -50,13 +54,44 @@ def process_document(
     logger.info("=" * 60)
     logger.info(f"Processing: {pdf_path.name}")
     logger.info(f"Document ID: {document_id}")
+    if page_range:
+        logger.info(f"Page range: {page_range[0]}-{page_range[1]}")
     logger.info("=" * 60)
 
     try:
         # ── 1. PDF to page images ──────────────────────────────
         logger.info("STAGE 1: Extracting PDF pages...")
-        pages_data = extract_pages(str(pdf_path))
-        logger.info(f"  {len(pages_data)} pages extracted")
+        all_pages_data = extract_pages(str(pdf_path))
+        total_pdf_pages = len(all_pages_data)
+        logger.info(f"  {total_pdf_pages} pages extracted from PDF")
+
+        # Apply page range filter if specified
+        if page_range is not None:
+            range_start, range_end = page_range
+            # Clamp to actual PDF page count
+            range_start = max(1, range_start)
+            range_end = min(range_end, total_pdf_pages)
+
+            if range_start > total_pdf_pages:
+                logger.error(
+                    f"[{document_id}] Page range start ({range_start}) "
+                    f"exceeds total pages ({total_pdf_pages})"
+                )
+                return None
+
+            pages_data = all_pages_data[range_start - 1 : range_end]
+
+            # Renumber pages to be 1-based within the range
+            for i, page in enumerate(pages_data):
+                page["_original_page_number"] = page["page_number"]
+                page["page_number"] = i + 1
+
+            logger.info(
+                f"  Filtered to pages {range_start}-{range_end} "
+                f"({len(pages_data)} pages)"
+            )
+        else:
+            pages_data = all_pages_data
 
         # ── 2. Detect sections (or use precomputed) ───────────
         if precomputed_sections is not None:
@@ -124,6 +159,29 @@ def process_document(
         else:
             logger.info("STAGE 3.5: Term matching SKIPPED (disabled)")
 
+        # ── 3.6 (optional) Effective date extraction ──────────
+        effective_date_report = None
+        if EFFECTIVE_DATE_ENABLED:
+            logger.info("STAGE 3.6: Extracting effective date...")
+            date_extractor = EffectiveDateExtractor()
+            effective_date_report = date_extractor.extract_effective_date(
+                section_jsons, document_id,
+                document_header=header,
+            )
+        else:
+            logger.info("STAGE 3.6: Effective date extraction SKIPPED (disabled)")
+
+        # ── 3.7 (optional) Unit of measure extraction ─────────
+        uom_report = None
+        if UOM_EXTRACTION_ENABLED:
+            logger.info("STAGE 3.7: Extracting units of measure...")
+            uom_extractor = UOMExtractor()
+            uom_report = uom_extractor.extract_uom(
+                section_jsons, document_id,
+            )
+        else:
+            logger.info("STAGE 3.7: UOM extraction SKIPPED (disabled)")
+
         # ── 4. Optional review ─────────────────────────────────
         if REVIEW_ENABLED:
             logger.info("STAGE 4: Reviewing...")
@@ -150,6 +208,30 @@ def process_document(
                 "unmatched_terms": term_matching_report.get(
                     "unmatched_terms", []
                 ),
+            }
+
+        # Include effective date in metadata if available
+        if effective_date_report is not None:
+            primary = effective_date_report.get(
+                "primary_effective_date", {}
+            )
+            metadata["effective_date"] = {
+                "date": primary.get("date", ""),
+                "normalised": primary.get("normalised", ""),
+                "date_type": primary.get("date_type", ""),
+                "confidence": primary.get("confidence", ""),
+                "no_date_found": effective_date_report.get(
+                    "no_date_found", True
+                ),
+            }
+
+        # Include UOM extraction summary in metadata if available
+        if uom_report is not None:
+            uoms = uom_report.get("units_of_measure", [])
+            metadata["uom_extraction"] = {
+                "total_references": len(uoms),
+                "distinct_units": uom_report.get("distinct_units", []),
+                "no_uom_found": uom_report.get("no_uom_found", True),
             }
 
         document_json, metadata = validator.validate_and_combine(

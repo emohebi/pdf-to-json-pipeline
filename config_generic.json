@@ -200,15 +200,27 @@
     },
 
     "term_matching": {
-      "enabled": false,
-      "terms": [],
+      "enabled": true,
+      "terms": ["Rate escalation", "Price Adjustment / amendment", "Fee Escalation / Fee Revision", "Indexation", "Rise / fall", "markups" ,"revised rates / pricing", "Increase / escalation of charges",
+                "Agreed pricing", "Rate Card / Service Fee / Contract Price", "Negotiated rate, Lump sum, fixed price, basis of charge", "Preamble", "Preliminary / Preparatory statement", "introduction",
+                "Introductory provisions", "Purpose", "Recitals", "Permutation of cost", "Cost variations / Adjustment" ,"price variation", "Price mechanism", "Pricing scheme / schedule", "Fee Schedule / Schedule of rates",
+                "Price on ad/hoc basis", "Ad-Hoc pricing", "As-needed / on-request pricing", "case-by-case pricing", "Currency", "AUD", "USD", "dollar amount", "payment denomination", "base / specified currency", "monetary unit",
+                "Mobilise and demobilise", "Commence work", "deploy", "begin delivery", "initiate activities", "Site Works", "Start up activities", "ramp-up", "Cease work / Withdraw / Complete / Close out / Wrap up / removal / termination",
+                "Price components", "Cost components", "price / cost elements", "cost breakdown", "fee components", "The basis on which the charges should be applied",
+                "charging methodology", "fee calculation / model / mechanism", "application of charges", "Any clauses that amend the agreed rates", "Rate variation / amendment /  adjustment clauses", "conditional"],
       "terms_per_batch": 10,
       "max_snippet_chars": 1500,
       "max_tokens": 8192
     },
 
     "effective_date": {
-      "enabled": false,
+      "enabled": true,
+      "max_snippet_chars": 2000,
+      "max_tokens": 4096
+    },
+
+    "uom_extraction": {
+      "enabled": true,
       "max_snippet_chars": 2000,
       "max_tokens": 4096
     },
@@ -520,6 +532,61 @@
           "- If no date can be identified, set no_date_found to true.",
           "- Use the EXACT date text as it appears in the document.",
           "- normalised = ISO YYYY-MM-DD where possible.",
+          "",
+          "Return the JSON now:"
+        ]
+      },
+
+      "uom_extraction": {
+        "template": [
+          "You are a contract pricing analysis expert.",
+          "",
+          "I will give you the extracted sections of a contract document.",
+          "Your task is to identify every UNIT OF MEASURE (UOM) used for",
+          "pricing in this contract.",
+          "",
+          "DOCUMENT SECTIONS:",
+          "{section_summaries}",
+          "",
+          "WHAT TO LOOK FOR:",
+          "- Rate tables, pricing schedules, or fee schedules that specify",
+          "  how charges are measured (e.g. per hour, per day, each, etc.)",
+          "- Contract clauses that define how pricing is calculated",
+          "- Column headers in tables (e.g. 'Rate ($/hr)', 'Unit', 'UOM')",
+          "- Pricing descriptions (e.g. 'Lump Sum', 'Per Tonne', 'Monthly')",
+          "- Any reference to the basis on which charges are applied",
+          "",
+          "COMMON UNITS OF MEASURE:",
+          "- Time-based: Hourly, Daily, Weekly, Monthly, Annually",
+          "- Quantity-based: Each, Per Item, Per Unit, Per Lot",
+          "- Weight/Volume: Per Tonne, Per Kilogram, Per Litre, Per Cubic Metre",
+          "- Distance/Area: Per Metre, Per Square Metre, Per Kilometre",
+          "- Fixed: Lump Sum, Fixed Fee, Flat Rate",
+          "- Other: Per Trip, Per Mobilisation, Per Shift, Percentage",
+          "",
+          "Return ONLY a JSON object (no markdown, start with {{):",
+          "{{",
+          "  \"units_of_measure\": [",
+          "    {{",
+          "      \"unit\": \"<UOM as written in the document>\",",
+          "      \"normalised_unit\": \"<standardised lowercase label, e.g. hour, day, each, lump_sum, tonne>\",",
+          "      \"applies_to\": \"<what this unit prices -- e.g. Labour rates, Equipment hire, Materials>\",",
+          "      \"source_section\": \"<section name where found>\",",
+          "      \"confidence\": \"high | medium | low\",",
+          "      \"verbatim_text\": \"<the exact text/phrase from the document where this UOM appears>\"",
+          "    }}",
+          "  ],",
+          "  \"distinct_units\": [\"<list of unique normalised_unit values>\"],",
+          "  \"no_uom_found\": false",
+          "}}",
+          "",
+          "RULES:",
+          "- Include EVERY distinct UOM reference, even if the same unit",
+          "  appears in multiple sections (list each occurrence).",
+          "- distinct_units = deduplicated list of normalised_unit values.",
+          "- If no pricing or UOM information exists, set no_uom_found to true.",
+          "- Use the EXACT text as it appears for 'unit' and 'verbatim_text'.",
+          "- normalised_unit = short, lowercase, standardised label.",
           "",
           "Return the JSON now:"
         ]
