@@ -22,7 +22,7 @@
     "azure_openai": {
       "endpoint_env": "AZURE_OPENAI_ENDPOINT",
       "api_key_env": "AZURE_OPENAI_API_KEY",
-      "deployment_name": "gpt-4o",
+      "deployment_name": "gpt-5.1",
       "api_version": "2024-12-01-preview",
       "max_retries": 3,
       "retry_delay": 5,
@@ -208,7 +208,7 @@
     },
 
     "effective_date": {
-      "enabled": false,
+      "enabled": true,
       "max_snippet_chars": 2000,
       "max_tokens": 4096
     },

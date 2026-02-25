@@ -31,19 +31,21 @@ class AzureOpenAIProvider(LLMProvider):
         )
         http_client = httpx.Client(verify=False)
         try:
+            # self.client = AzureOpenAI(
+            #     azure_ad_token_provider=token_provider,
+            #     api_version=AZURE_OPENAI_API_VERSION,
+            #     azure_endpoint=AZURE_OPENAI_ENDPOINT,
+            #     http_client=http_client
+            # )
             self.client = AzureOpenAI(
-                azure_ad_token_provider=token_provider,
-                api_version=AZURE_OPENAI_API_VERSION,
-                azure_endpoint=AZURE_OPENAI_ENDPOINT,
+                azure_endpoint=AZURE_OPENAI_ENDPOINT, api_key=AZURE_OPENAI_API_KEY,
+                api_version=AZURE_OPENAI_API_VERSION, timeout=AZURE_OPENAI_TIMEOUT,
                 http_client=http_client
             )
         except Exception as e:
             raise ValueError(f"Failed to initialize Azure OpenAI client: {e}")
 
-        # self.client = AzureOpenAI(
-        #     azure_endpoint=AZURE_OPENAI_ENDPOINT, api_key=AZURE_OPENAI_API_KEY,
-        #     api_version=AZURE_OPENAI_API_VERSION, timeout=AZURE_OPENAI_TIMEOUT,
-        # )
+        
         self.deployment = AZURE_OPENAI_DEPLOYMENT
         self.temperature = MODEL_TEMPERATURE
         self.max_retries = MAX_RETRIES
@@ -75,7 +77,7 @@ class AzureOpenAIProvider(LLMProvider):
             try:
                 response = self.client.chat.completions.create(
                     model=self.deployment, messages=messages,
-                    max_tokens=max_tokens, temperature=self.temperature,
+                    max_completion_tokens=max_tokens, temperature=self.temperature,
                 )
                 text = response.choices[0].message.content
                 if text is None:

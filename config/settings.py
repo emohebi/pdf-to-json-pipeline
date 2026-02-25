@@ -63,8 +63,8 @@ MODEL = BEDROCK_MODEL_ID
 _azure = _task.get("azure_openai", {})
 AZURE_OPENAI_ENDPOINT = os.getenv(_azure.get("endpoint_env", "AZURE_OPENAI_ENDPOINT"), _azure.get("endpoint", ""))
 AZURE_OPENAI_API_KEY = os.getenv(_azure.get("api_key_env", "AZURE_OPENAI_API_KEY"), "")
-AZURE_OPENAI_DEPLOYMENT = _azure.get("deployment_name", "gpt-4o")
-AZURE_OPENAI_API_VERSION = _azure.get("api_version", "2024-12-01-preview")
+AZURE_OPENAI_DEPLOYMENT = _azure.get("deployment_name", "gpt-5.1")
+AZURE_OPENAI_API_VERSION = _azure.get("api_version", "2025-11-13")
 AZURE_OPENAI_TIMEOUT = _azure.get("timeout", 600)
 
 MAX_WORKERS = int(os.getenv("MAX_WORKERS", _proc.get("max_workers", 5)))
