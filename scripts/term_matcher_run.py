@@ -137,7 +137,7 @@ def main():
     from src.agents.term_matcher import TermMatchingAgent
 
     # --- Load the document JSON ---
-    args.input = "./output/20260220_223355/final/BHP_JBB_EPCM_Contract_Final_R0_301122_Calibre_Signed.json"
+    args.input = "./output/20260224_234604/final/Amended_and_Restated_GPSFA_KPMG_Fully_Executed_151221_2.json"
     input_path = Path(args.input)
     if not input_path.exists():
         print(f"ERROR: Input file not found: {input_path}")

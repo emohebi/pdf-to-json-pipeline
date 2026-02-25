@@ -170,6 +170,19 @@ def is_effective_date_enabled() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# UOM extraction (config-driven, optional)
+# ---------------------------------------------------------------------------
+
+def get_uom_extraction_config() -> Dict[str, Any]:
+    """Return the TASK.uom_extraction config block."""
+    return get_task_config().get("uom_extraction", {})
+
+def is_uom_extraction_enabled() -> bool:
+    """Check if UOM extraction is enabled in config."""
+    return get_uom_extraction_config().get("enabled", False)
+
+
+# ---------------------------------------------------------------------------
 # Prompts
 # ---------------------------------------------------------------------------
 
