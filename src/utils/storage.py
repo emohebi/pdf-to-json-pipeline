@@ -56,10 +56,11 @@ class StorageManager:
         from config.settings import (
             DETECTION_DIR, SECTIONS_DIR, FINAL_DIR,
             INTERMEDIATE_DIR, SAVE_INTERMEDIATES, TERM_MATCHING_DIR,
-            EFFECTIVE_DATE_DIR, UOM_EXTRACTION_DIR,
+            EFFECTIVE_DATE_DIR, UOM_EXTRACTION_DIR, BATCHES_DIR
         )
         self.detection_dir = DETECTION_DIR
         self.sections_dir = SECTIONS_DIR
+        self.batch_dir = BATCHES_DIR
         self.final_dir = FINAL_DIR
         self.intermediate_dir = INTERMEDIATE_DIR
         self.save_intermediates = SAVE_INTERMEDIATES
@@ -72,6 +73,10 @@ class StorageManager:
             return
         path = _make_safe_path(self.detection_dir, document_id, "detection")
         self._write_json(path, sections)
+
+    def save_batch_json(self, section_name: str, data: Dict):
+        path = _make_safe_path(self.batch_dir, "", section_name)
+        self._write_json(path, data)
 
     def save_section_json(self, document_id: str, section_name: str, data: Dict, confidence: float):
         if not self.save_intermediates:

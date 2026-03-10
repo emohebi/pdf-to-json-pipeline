@@ -263,6 +263,8 @@ def _extract_sequential(
     """Extract sections one at a time."""
     results = []
     for i, section in enumerate(sections):
+        if section["section_name"] == 'front_matter': 
+            continue
         next_name = (
             sections[i + 1]["section_name"]
             if i + 1 < len(sections) else "END"

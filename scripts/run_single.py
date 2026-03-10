@@ -92,7 +92,8 @@ def main():
     args = parser.parse_args()
     args.config = None
     args.sections_json = None
-    args.pages = "1-131"
+    # args.sections_json = "./output/20260301_154125/intermediate/detection/Amended_and_Restated_GPSFA_KPMG_Fully_Executed_151221_2_detection.json"
+    # args.pages = "1-131"
     # Parse page range
     page_range = None
     if args.pages:
@@ -113,20 +114,20 @@ def main():
     )
     from config import settings
 
-    if args.review:
-        settings.REVIEW_ENABLED = True
-    elif args.no_review:
-        settings.REVIEW_ENABLED = False
+    # if args.review:
+    #     settings.REVIEW_ENABLED = True
+    # elif args.no_review:
+    #     settings.REVIEW_ENABLED = False
 
-    if args.term_match:
-        settings.TERM_MATCHING_ENABLED = True
-    elif args.no_term_match:
-        settings.TERM_MATCHING_ENABLED = False
+    # if args.term_match:
+    #     settings.TERM_MATCHING_ENABLED = True
+    # elif args.no_term_match:
+    #     settings.TERM_MATCHING_ENABLED = False
 
-    if args.effective_date:
-        settings.EFFECTIVE_DATE_ENABLED = True
-    elif args.no_effective_date:
-        settings.EFFECTIVE_DATE_ENABLED = False
+    # if args.effective_date:
+    #     settings.EFFECTIVE_DATE_ENABLED = True
+    # elif args.no_effective_date:
+    #     settings.EFFECTIVE_DATE_ENABLED = False
 
     from src.pipeline import process_document
 
@@ -136,6 +137,7 @@ def main():
     print(f"  Review: {settings.REVIEW_ENABLED}")
     print(f"  Term Matching: {settings.TERM_MATCHING_ENABLED}")
     print(f"  Effective Date: {settings.EFFECTIVE_DATE_ENABLED}")
+    print(f"  UOM: {settings.UOM_EXTRACTION_ENABLED}")
     print(f"  Output: {settings.OUTPUT_DIR}")
     if page_range:
         print(f"  Page range: {page_range[0]}-{page_range[1]}")

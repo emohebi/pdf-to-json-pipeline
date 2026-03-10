@@ -25,7 +25,7 @@ from src.utils import setup_logger, StorageManager
 
 logger = setup_logger("section_extractor")
 
-BATCH_SIZE = 20
+BATCH_SIZE = 2
 
 
 # ============================================================================
@@ -121,6 +121,33 @@ def _deep_merge(base: Dict, overlay: Dict) -> Dict:
             ):
                 merged[key] = val
     return merged
+
+
+def _build_image_manifest(start_page: int, num_pages: int) -> str:
+    """
+    Build an explicit image-to-page mapping string so the LLM knows
+    exactly which image corresponds to which page and can verify it
+    processed all of them.
+
+    Uses 'PDF Page' terminology to disambiguate from printed page
+    numbers that may appear in document headers/footers.
+    """
+    lines = [f"IMAGE-TO-PAGE MAPPING ({num_pages} images):"]
+    for i in range(num_pages):
+        lines.append(f"  Image {i + 1} = PDF Page {start_page + i}")
+    lines.append("")
+    lines.append(
+        "CRITICAL: The page numbers above refer to PDF page positions "
+        "(Image 1 is the FIRST image shown, Image 2 is the SECOND, etc). "
+        "The document may have DIFFERENT printed page numbers in its "
+        "headers or footers - IGNORE those. Use the image order above."
+    )
+    lines.append("")
+    lines.append(
+        f"You MUST extract content from EVERY image (all {num_pages}). "
+        f"Process them in order: Image 1, Image 2, ..., Image {num_pages}."
+    )
+    return "\n".join(lines)
 
 
 # ============================================================================
@@ -243,6 +270,13 @@ class SectionExtractionAgent:
             image_prompt_text, doc_type_guidance,
         )
 
+        # Add image manifest so the LLM knows exactly which image
+        # is which page and can verify completeness
+        manifest = _build_image_manifest(
+            section_info["start_page"], len(section_pages)
+        )
+        prompt = manifest + "\n\n" + prompt
+
         response = invoke_multimodal(
             images=images_b64, prompt=prompt,
             max_tokens=MODEL_MAX_TOKENS_EXTRACTION,
@@ -270,6 +304,7 @@ class SectionExtractionAgent:
         Each batch receives context about:
           - Which batch it is (N of M)
           - Which absolute pages it covers
+          - An explicit image-to-page manifest
           - The expected output schema (same for every batch)
 
         Merge strategy:
@@ -310,31 +345,57 @@ class SectionExtractionAgent:
             batch_info["start_page"] = b_start
             batch_info["end_page"] = b_end
 
-            # Only the last batch mentions the next section name
+            # Only the last batch mentions the next section name.
+            # For non-last batches, use "END OF SHOWN PAGES" so the
+            # prompt template renders a clear boundary instead of an
+            # empty string (which confuses the LLM).
             batch_next = (
                 next_section_name
                 if batch_idx == n_batches
-                else ""
+                else "END OF SHOWN PAGES"
             )
 
-            # Build batch context to prepend to the prompt
-            batch_context = (
-                f"\n\nBATCH PROCESSING CONTEXT:\n"
-                f"This section spans {total_pages} pages "
-                f"(pages {start_page}-{section_info['end_page']}).\n"
-                f"You are processing batch {batch_idx} of {n_batches} "
-                f"(pages {b_start}-{b_end}).\n"
-                f"Extract ONLY the content visible in the pages shown. "
-                f"Do NOT invent or assume content from other batches.\n"
-                f"Use the SAME output schema — your output will be "
-                f"merged with other batches.\n"
-            )
-
+            # Build the base prompt
             prompt = self._build_prompt(
                 batch_info, batch_next,
                 image_prompt_text, doc_type_guidance,
             )
-            prompt += batch_context
+
+            # Add image manifest for this batch
+            manifest = _build_image_manifest(b_start, len(batch_pages))
+
+            # Add batch context — ONLY reference this batch's pages.
+            # Do NOT mention the full section page range, as this causes
+            # the LLM to anchor to pages beyond the current batch and
+            # either hallucinate content or mislabel which image is which page.
+            if batch_idx == 1:
+                heading_instruction = (
+                    "This is the FIRST batch — extract the section heading "
+                    "normally from the top of the content."
+                )
+            else:
+                heading_instruction = (
+                    "This is a CONTINUATION batch (not the first). "
+                    "If there is not a section heading visible then"
+                    "Set 'heading' to '' (empty string) and 'heading_level' to ''. "
+                    "Put ALL visible text into the 'body' array. "
+                    "Do NOT pick up text from the top of the page as a heading — "
+                    "it is body content continuing from the previous section."
+                )
+
+            batch_context = (
+                f"\n\nBATCH PROCESSING CONTEXT:\n"
+                f"You are shown {len(batch_pages)} page images "
+                f"(pages {b_start}-{b_end}).\n"
+                f"This is batch {batch_idx} of {n_batches} for this section.\n"
+                f"{heading_instruction}\n"
+                f"Extract ONLY the content visible in these {len(batch_pages)} images. "
+                f"Do NOT invent or assume content from pages you cannot see.\n"
+                f"Use the SAME output schema -- your output will be "
+                f"merged with other batches.\n"
+            )
+
+            prompt = manifest + "\n\n" + prompt + batch_context
 
             images_b64 = prepare_images_for_bedrock(batch_pages)
 
@@ -345,6 +406,7 @@ class SectionExtractionAgent:
                 )
                 response = response.replace(" -- ", " - ")
                 batch_json = self._parse(response)
+                self.storage.save_batch_json(f"{section_info["section_name"]}_{batch_idx}", batch_json)
                 batch_results.append(batch_json)
                 logger.info(
                     f"[{document_id}]   Batch {batch_idx} extracted OK"

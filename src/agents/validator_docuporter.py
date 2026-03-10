@@ -80,9 +80,11 @@ class ValidationAgentDocuPorter:
                 section_names.append(name)
         document_json["document_header"]["sections"] = section_names
 
-        # Bucket each section by type
+        # Bucket each section by type, AND track the document-order
+        # in which each type FIRST appears.
         sections_by_type: Dict[str, Any] = {}
         unhandled_content = []
+        type_first_seen_order: List[str] = []  # <-- preserves document order
 
         for section in section_jsons:
             stype = section.get("_metadata", {}).get("section_type", "unhandled_content")
@@ -94,6 +96,10 @@ class ValidationAgentDocuPorter:
                     stype = canonical
 
             formatted = format_section_for_docuporter(sdata, stype)
+
+            # Track first-seen order of each section type
+            if stype not in sections_by_type and stype != "unhandled_content":
+                type_first_seen_order.append(stype)
 
             if stype in self._object_types:
                 # Object sections: merge dicts
@@ -122,24 +128,42 @@ class ValidationAgentDocuPorter:
                 unhandled_content.append(item)
             else:
                 # Unknown type: treat as array
+                if stype not in sections_by_type:
+                    type_first_seen_order.append(stype)
                 sections_by_type.setdefault(stype, [])
                 if isinstance(formatted, list):
                     sections_by_type[stype].extend(formatted)
                 elif formatted:
                     sections_by_type[stype].append(formatted)
 
-        # Assemble in config-defined order
-        for stype in self._assembly_order:
+        # --- Assemble in DOCUMENT ORDER ---
+        # Use the order in which each section type first appeared in
+        # section_jsons (which follows page order from detection/extraction),
+        # then append any types from assembly_order that weren't seen
+        # (these get empty defaults).
+        assembled_types: set = set()
+
+        # First: types that appeared in the document, in document order
+        for stype in type_first_seen_order:
             if stype in sections_by_type:
                 document_json[stype] = sections_by_type[stype]
-            elif stype == "unhandled_content":
-                document_json["unhandled_content"] = unhandled_content
-            else:
-                document_json[stype] = self._get_empty_section(stype)
+                assembled_types.add(stype)
 
-        # Add any sections not in assembly_order
+        # Second: unhandled_content in its document-order position
+        if unhandled_content or "unhandled_content" in self._assembly_order:
+            document_json["unhandled_content"] = unhandled_content
+            assembled_types.add("unhandled_content")
+
+        # Third: any types from assembly_order that weren't seen
+        # (empty defaults for completeness)
+        for stype in self._assembly_order:
+            if stype not in assembled_types:
+                document_json[stype] = self._get_empty_section(stype)
+                assembled_types.add(stype)
+
+        # Fourth: any leftover types not in assembly_order
         for stype, sdata in sections_by_type.items():
-            if stype not in document_json:
+            if stype not in assembled_types:
                 document_json[stype] = sdata
 
         # Confidence

@@ -33,7 +33,7 @@
       "max_workers": 5,
       "batch_size": 100,
       "parallel": false,
-      "review": false,
+      "review": true,
       "max_images_per_batch": 20
     },
 
@@ -107,65 +107,28 @@
               "caption": "",
               "headers": [""],
               "rows": [[""]]
-            }],
-            "lists": [{
-              "list_title": "",
-              "items": [""]
-            }],
-            "images": [{ "text": "", "image": "" }]
+            }]
           }],
           "tables": [{
             "caption": "",
             "headers": [""],
             "rows": [[""]]
-          }],
-          "lists": [{
-            "list_title": "",
-            "items": [""]
-          }],
-          "images": [{ "text": "", "image": "" }]
+          }]
         },
         "table_section": [{
           "caption": "",
           "headers": [""],
           "rows": [[""]]
         }],
-        "list_section": [{
-          "list_title": "",
-          "items": [""]
-        }],
-        "image_section": [{
-          "caption": "",
-          "image": "",
-          "description": ""
-        }],
         "front_matter": {
           "heading": "",
-          "body": [""],
-          "tables": [{
-            "caption": "",
-            "headers": [""],
-            "rows": [[""]]
-          }],
-          "lists": [{
-            "list_title": "",
-            "items": [""]
-          }]
+          "body": [""]
         },
         "back_matter": {
           "heading": "",
-          "body": [""],
-          "tables": [{
-            "caption": "",
-            "headers": [""],
-            "rows": [[""]]
-          }],
-          "lists": [{
-            "list_title": "",
-            "items": [""]
-          }]
+          "body": [""]
         },
-        "unhandled_content": [{ "section": "", "text": "", "image": "" }]
+        "unhandled_content": [{ "section": "", "text": ""}]
       },
 
       "assembly_order": [
@@ -330,71 +293,122 @@
 
       "extraction": {
         "system_preamble": [
-          "You are an expert data extraction agent specialising in EXACT text extraction from documents.",
-          "",
-          "CRITICAL RULES:",
-          "- Copy text EXACTLY word-for-word; preserve spelling, capitalisation, punctuation",
-          "- Use ONLY ASCII characters (0-127) -- replace unicode dashes/bullets with ASCII equivalents",
-          "- DO NOT paraphrase, summarise, or infer text that is not visible",
-          "- Empty fields: use '' for strings, [] for arrays, {{}} for objects",
-          "- Never use null, 'N/A', 'Unknown', or placeholder text",
-          "- Return ONLY valid JSON -- no markdown, no extra text",
-          "- Escape special characters properly in JSON strings",
-          "",
-          "Schema to follow:",
-          "{schema}"
-        ],
+        "You are an expert data extraction agent. Your ONLY job is to copy text EXACTLY as it appears in the document images.",
+        "",
+        "=== ABSOLUTE RULES (never violate) ===",
+        "",
+        "1. VERBATIM COPY: Every word, number, and punctuation mark must match the source document exactly.",
+        "   - Do NOT fix spelling mistakes, grammatical errors, or inconsistent capitalisation.",
+        "   - Do NOT rephrase, paraphrase, summarise, condense, or reword anything.",
+        "   - Do NOT add words, articles, or connectors that are not visible in the document.",
+        "   - Do NOT drop words, even if they seem redundant or repeated.",
+        "",
+        "2. CHARACTER ENCODING: Output ONLY ASCII characters (codes 0-127).",
+        "   - Replace unicode dashes (em-dash, en-dash) with ' - ' (space-hyphen-space).",
+        "   - Replace bullet characters (bullet, triangles, arrows) with '- ' (hyphen-space).",
+        "   - Replace curly/smart quotes with straight quotes.",
+        "   - Replace ellipsis character with '...'.",
+        "   - For all other non-ASCII characters (e.g. degree signs, trademark, copyright, accented letters): keep the closest ASCII equivalent or transliteration.",
+        "   - NEVER silently delete a character; always replace with an ASCII equivalent.",
+        "",
+        "3. COMPLETENESS: Extract ALL visible text from EVERY page shown. Do not skip or abbreviate.",
+        "   - Scan each page from top to bottom, left to right.",
+        "   - If content looks repetitive (e.g. similar clauses, table rows), extract ALL occurrences.",
+        "   - If text is partially obscured but readable, extract what is visible.",
+        "   - If text is completely illegible, use '[illegible]'.",
+        "",
+        "4. JSON OUTPUT:",
+        "   - Return ONLY valid JSON. No markdown fences, no commentary, no preamble.",
+        "   - Start your response with {{ or [.",
+        "   - Empty fields: '' for strings, [] for arrays, {{}} for objects.",
+        "   - Never use null, 'N/A', 'None', 'Unknown', or any placeholder text.",
+        "   - Escape special characters properly: backslash, quotes, newlines within strings.",
+        "",
+        "Schema to follow:",
+        "{schema}"
+      ],
+      "default_template": [
+        "Extract ALL text from the document pages shown into the JSON schema above.",
+        "",
+        "Section: {section_name} ({section_type})",
+        "Pages: {start_page} to {end_page}",
+        "Next section after this one: '{next_section_name}'",
+        "{image_info}",
+        "",
+        "{doc_type_guidance}",
+        "",
+        "=== WHAT TO EXTRACT ===",
+        "",
+        "Extract ALL visible text from page {start_page} through page {end_page}.",
+        "STOP extracting when you reach content that belongs to '{next_section_name}'.",
+        "",
+        "=== HEADING ===",
+        "- 'heading': The EXACT section heading text as a plain string, copied verbatim.",
+        "- 'heading_level': The nesting depth: '1' for top-level, '2' for sub-section, '3' for sub-sub, etc.",
+        "",
+        "=== BODY (critical — read carefully) ===",
+        "The 'body' field is an array of strings. Each string represents one LOGICAL BLOCK:",
+        "",
+        "- A paragraph (one or more lines of continuous prose) = ONE string.",
+        "  If a sentence wraps across multiple visual lines, join them into one string.",
+        "  Preserve the paragraph's exact wording.",
+        "",
+        "- A numbered or lettered clause (e.g. '(a) ...', '(i) ...', '1.1.1 ...') = ONE string per clause.",
+        "  Include the number/letter prefix as part of the string.",
+        "  If a clause spans multiple visual lines, join them into one string.",
+        "",
+        "- A bullet point or dash-prefixed item = ONE string per item.",
+        "  Include the bullet/dash prefix as part of the string.",
+        "  Do NOT extract bullets as table rows.",
+        "",
+        "- A standalone line (e.g. a short note, a label, a date) = ONE string.",
+        "",
+        "RULE: When in doubt whether two lines are one block or two, keep them SEPARATE.",
+        "It is better to have too many strings than to accidentally merge unrelated content.",
+        "",
+        "=== SUBSECTIONS ===",
+        "If you see sub-headings inside this section, nest them as objects in the 'subsections' array.",
+        "Each subsection has its own 'heading', 'heading_level', 'body', 'subsections', and 'tables'.",
+        "Apply the same body extraction rules recursively.",
+        "",
+        "=== TABLES ===",
+        "- Extract every table: 'caption' (if any, otherwise ''), 'headers' (array of column header strings), 'rows' (array of arrays).",
+        "- Each row is an array of cell strings, matching the column order.",
+        "- Copy cell text exactly. For merged cells that span columns, place the text in the first cell and use '' for the spanned cells.",
+        "- For merged cells that span rows, repeat the text in each row the cell spans.",
+        "- If a cell contains multiple lines, join them with a single space.",
+        "",
+        "=== IMAGES ===",
+        "- For images: match by PAGE and POSITION from the image list above.",
+        "- Copy the EXACT path into the 'image' field.",
+        "- Include any visible captions in the 'text' field.",
+        "",
+        "=== MULTI-PAGE SECTIONS ===",
+        "- Process ALL pages from {start_page} to {end_page} sequentially.",
+        "- Content that flows from one page to the next is part of the same logical block.",
+        "  If a paragraph or clause starts on one page and continues on the next page,",
+        "  join them into a single string (do not split mid-sentence).",
+        "- Page headers and footers (e.g. page numbers, document titles repeated on every page) should be EXCLUDED.",
+        "",
+        "=== SELF-CHECK (do this before returning) ===",
+        "Before returning your JSON, mentally verify:",
+        "1. Have I extracted text from EVERY page ({start_page} through {end_page})?",
+        "2. Have I included ALL paragraphs, clauses, bullet points, and table rows?",
+        "3. Is every string a verbatim copy (no rewording, no missing words)?",
+        "4. Did I stop before content belonging to '{next_section_name}'?",
+        "",
+        "Return the complete JSON now (start with {{ or [, no markdown):"
+      ],
+      "general_rules": [
+        "FINAL REMINDERS:",
+        "- Every word must be copied verbatim from the document. Do not rephrase.",
+        "- Do not skip repetitive content. If ten similar clauses exist, extract all ten.",
+        "- Numbered items like (a), (b), (c) or (i), (ii), (iii) are separate body strings, not one merged string.",
+        "- Do not invent section headings or field values that are not visible in the document.",
+        "- Check every page: did you extract all content from pages {start_page} through {end_page}?"
+      ],
 
-        "default_template": [
-          "Extract ALL information from this document section into JSON.",
-          "",
-          "Section: {section_name} ({section_type})",
-          "Pages: {start_page} to {end_page}",
-          "{image_info}",
-          "",
-          "EXTRACTION RULES:",
-          "1. Extract ALL text from section '{section_name}' up to next section '{next_section_name}'.",
-          "2. If the section continues across pages, concatenate all content.",
-          "3. Empty arrays [] instead of [\"\"].",
-          "4. Empty dicts {{}} instead of {{\"key\": \"\"}}.",
-          "",
-          "HEADING AND BODY:",
-          "- 'heading' = the EXACT section heading text as a plain string.",
-          "- 'heading_level' = the apparent nesting depth: '1' for top-level, '2' for sub-section, '3' for sub-sub, etc.",
-          "- 'body' = array of strings; each new paragraph or line break = a new string in the array.",
-          "",
-          "SUBSECTIONS:",
-          "- If you see sub-headings inside this section, nest them as objects in the 'subsections' array.",
-          "- Each subsection has its own heading, body, tables, lists, and images.",
-          "",
-          "TABLES:",
-          "- Extract every table: caption (if any), header row as array of strings, and all data rows.",
-          "- Each row is an array of cell strings.",
-          "- Preserve the exact cell text; for merged cells, repeat content or leave empty as appropriate.",
-          "",
-          "LISTS:",
-          "- Extract bulleted and numbered lists: list_title (if any) and items as an array of strings.",
-          "- Each bullet/number -> one string in the items array.",
-          "",
-          "IMAGES:",
-          "- For images: match by PAGE and POSITION from the list above, copy the EXACT path into the 'image' field.",
-          "- Include captions if present in the 'text' field.",
-          "",
-          "Look at ALL pages ({start_page} to {end_page}) and extract everything.",
-          "",
-          "Return the complete JSON now (start with {{ or [, no markdown):"
-        ],
-
-        "section_overrides": {},
-
-        "general_rules": [
-          "CRITICAL PARAGRAPH RULE:",
-          "- Each new paragraph or line break -> a new string in the body/items array.",
-          "",
-          "EMPTY FIELD HANDLING:",
-          "- If a field has no content -> use '' for strings, [] for arrays, {{}} for objects",
-          "- Empty arrays: [] instead of [\"\"]"
-        ]
+        "section_overrides": {}
       },
 
       "review_template": [
