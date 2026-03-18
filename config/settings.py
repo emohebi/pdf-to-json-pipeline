@@ -74,9 +74,7 @@ AZURE_OPENAI_DEPLOYMENT = _azure.get("deployment_name", "gpt-5.1")
 AZURE_OPENAI_API_VERSION = _azure.get("api_version", "2025-11-13")
 AZURE_OPENAI_TIMEOUT = _azure.get("timeout", 600)
 
-MAX_WORKERS = int(os.getenv("MAX_WORKERS", _proc.get("max_workers", 5)))
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", _proc.get("batch_size", 100)))
-PARALLEL = _proc.get("parallel", False)
 REVIEW_ENABLED = _proc.get("review", False)
 MAX_IMAGES_PER_BATCH = _proc.get("max_images_per_batch", 20)
 
@@ -88,6 +86,10 @@ EFFECTIVE_DATE_ENABLED = is_effective_date_enabled()
 
 # Unit of measure extraction (optional step)
 UOM_EXTRACTION_ENABLED = is_uom_extraction_enabled()
+
+# Post-interruption continuation check in section detector (optional step)
+_detection = _task.get("detection", {})
+POST_INTERRUPTION_CHECK_ENABLED = _detection.get("post_interruption_check", False)
 
 MODEL_TEMPERATURE = _mp.get("temperature", 0)
 MODEL_MAX_TOKENS_DETECTION = _mp.get("max_tokens_detection", 4096)

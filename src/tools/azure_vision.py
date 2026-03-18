@@ -3,6 +3,7 @@ import time
 from typing import List, Optional
 from src.tools.llm_provider import LLMProvider
 from src.utils.logger import setup_logger
+import logging
 
 logger = setup_logger("azure_vision")
 
@@ -26,6 +27,7 @@ class AzureOpenAIProvider(LLMProvider):
         # Initialize client
         from azure.identity import DefaultAzureCredential, get_bearer_token_provider
         import httpx
+        logging.getLogger("httpx").setLevel(logging.CRITICAL)
         token_provider = get_bearer_token_provider(
             DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
         )

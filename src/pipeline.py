@@ -9,10 +9,9 @@ import json
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from config.settings import (
-    PARALLEL, MAX_WORKERS, REVIEW_ENABLED, TERM_MATCHING_ENABLED,
+    REVIEW_ENABLED, TERM_MATCHING_ENABLED,
     EFFECTIVE_DATE_ENABLED, UOM_EXTRACTION_ENABLED,
 )
 from config.schemas_docuporter import get_section_schema
@@ -21,12 +20,16 @@ from src.agents import ValidationAgentDocuPorter, ReviewAgent
 from src.agents.term_matcher import TermMatchingAgent
 from src.agents.effective_date_extractor import EffectiveDateExtractor
 from src.agents.uom_extractor import UOMExtractor
-from src.tools.bedrock_vision import prepare_images_for_bedrock
 from src.utils import StorageManager, setup_logger
 from src.utils.pdf_processor import extract_pages
 from src.agents.document_header_extractor import DocumentHeaderExtractor
 
 logger = setup_logger("pipeline")
+
+# Section types that should not be sent through full extraction.
+# The header extractor handles the first page; TOC/blank pages have
+# no meaningful structured content to extract.
+_SKIP_SECTION_TYPES = {"front_matter"}
 
 
 def process_document(
@@ -133,19 +136,13 @@ def process_document(
                 f"'{sec['section_name']}' "
                 f"pp {sec['start_page']}-{sec['end_page']}"
             )
+
         header_extractor = DocumentHeaderExtractor()
         header = header_extractor.extract_header(pages_data[0], document_id)
-        # ── 3. Extract sections ────────────────────────────────
-        if PARALLEL:
-            logger.info("STAGE 3: Extracting sections (PARALLEL)...")
-            section_jsons = _extract_parallel(
-                sections, pages_data, document_id
-            )
-        else:
-            logger.info("STAGE 3: Extracting sections (SEQUENTIAL)...")
-            section_jsons = _extract_sequential(
-                sections, pages_data, document_id
-            )
+
+        # ── 3. Extract sections (sequential, preserving page order) ──
+        logger.info("STAGE 3: Extracting sections...")
+        section_jsons = _extract_sequential(sections, pages_data, document_id)
         logger.info(f"  {len(section_jsons)} sections extracted")
 
         # ── 3.5 (optional) Term matching ───────────────────────
@@ -255,19 +252,38 @@ def process_document(
 # Section extraction helpers
 # ====================================================================
 
+def _should_skip_section(section: Dict) -> bool:
+    """
+    Return True for section types that do not need LLM extraction.
+
+    front_matter (cover pages, TOC pages) are handled by the document
+    header extractor. Sending them through the full extraction agent
+    wastes LLM calls and produces noise in the output.
+    """
+    return section.get("section_type") in _SKIP_SECTION_TYPES
+
+
 def _extract_sequential(
     sections: List[Dict],
     pages_data: List[Dict],
     document_id: str,
 ) -> List[Dict]:
-    """Extract sections one at a time."""
+    """
+    Extract sections one at a time, preserving page order.
+
+    Sections are processed in the order they appear in `sections`
+    (which is sorted by start_page from the detector).  The resulting
+    list maintains that same page order.
+    """
     results = []
-    for i, section in enumerate(sections):
-        if section["section_name"] == 'front_matter': 
-            continue
+    # Build a clean list of extractable sections first so next_name
+    # lookups are based on extractable neighbours only.
+    extractable = [s for s in sections if not _should_skip_section(s)]
+
+    for i, section in enumerate(extractable):
         next_name = (
-            sections[i + 1]["section_name"]
-            if i + 1 < len(sections) else "END"
+            extractable[i + 1]["section_name"]
+            if i + 1 < len(extractable) else "END"
         )
         schema = get_section_schema(section["section_type"])
         agent = SectionExtractionAgent(schema)
@@ -278,38 +294,5 @@ def _extract_sequential(
             section_pages, section, next_name, document_id
         )
         results.append(result)
+
     return results
-
-
-def _extract_parallel(
-    sections: List[Dict],
-    pages_data: List[Dict],
-    document_id: str,
-) -> List[Dict]:
-    """Extract sections in parallel."""
-    results = [None] * len(sections)
-
-    def _extract_one(idx, section):
-        next_name = (
-            sections[idx + 1]["section_name"]
-            if idx + 1 < len(sections) else "END"
-        )
-        schema = get_section_schema(section["section_type"])
-        agent = SectionExtractionAgent(schema)
-        section_pages = pages_data[
-            section["start_page"] - 1 : section["end_page"]
-        ]
-        return idx, agent.extract_section(
-            section_pages, section, next_name, document_id
-        )
-
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {
-            executor.submit(_extract_one, i, s): i
-            for i, s in enumerate(sections)
-        }
-        for future in as_completed(futures):
-            idx, result = future.result()
-            results[idx] = result
-
-    return [r for r in results if r is not None]

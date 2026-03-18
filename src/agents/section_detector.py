@@ -29,7 +29,7 @@ import json
 import re
 from typing import List, Dict, Optional, Tuple
 
-from config.settings import MAX_IMAGES_PER_BATCH
+from config.settings import MAX_IMAGES_PER_BATCH, POST_INTERRUPTION_CHECK_ENABLED
 from config.config_loader import (
     get_section_definitions,
     get_document_type_name,
@@ -41,6 +41,12 @@ from src.tools.bedrock_vision import prepare_images_for_bedrock
 from src.utils import setup_logger, StorageManager
 
 logger = setup_logger("section_detector")
+
+# Page types that are assumed to occupy exactly one page and do NOT
+# need a boundary-check trace.  A cover/title page is definitionally
+# a single page; running the accumulative-window loop on it wastes LLM
+# calls and can bleed into the next section.
+_SINGLE_PAGE_TYPES = {"cover_page", "blank_page"}
 
 
 # =====================================================================
@@ -285,11 +291,11 @@ class SectionDetectionAgent:
 
     def __init__(self):
         self.section_definitions = {
-                        "cover page": "Title page, cover, or document header page",
-                        "table of content": "Table of Contents listing sections with page numbers",
-                        "blank page": "Blank or nearly blank page",
-                        "section": "A new document section begins somewhere on this page",
-                    } #get_section_definitions()
+            "cover page": "Title page, cover, or document header page",
+            "table of content": "Table of Contents listing sections with page numbers",
+            "blank page": "Blank or nearly blank page",
+            "section": "A new document section begins somewhere on this page",
+        }
         self.storage = StorageManager()
         self.max_window = MAX_IMAGES_PER_BATCH
 
@@ -347,25 +353,27 @@ class SectionDetectionAgent:
         Flow per page:
           scan → list of elements starting here
           for each element:
-            (cover/toc/blank) → absorb consecutive same-type pages
-            (section_start)   → trace → chain via boundary info → advance
+            (cover/blank)   → record as single-page, no boundary check
+            (toc_page)      → trace with boundary check (TOC can span pages)
+            (section_start) → trace → chain via boundary info → advance
           if empty list → continuation, advance +1
         """
         type_map = {
-                        "cover_page": ("front_matter", "Cover Page"),
-                        "toc_page": ("front_matter", "Table of Contents"),
-                        "blank_page": ("unhandled_content", "Blank Page"),
-                    }
+            "cover_page": ("front_matter", "Cover Page"),
+            "toc_page":   ("front_matter", "Table of Contents"),
+            "blank_page": ("unhandled_content", "Blank Page"),
+        }
         total = len(pages_data)
         sections: List[Dict] = []
         current_page = 1
         claimed_pages: set = set()
-        last_content_section: Optional[Dict] = None  # track last section before TOC/cover/blank
+        last_content_section: Optional[Dict] = None
 
         while current_page <= total:
             if current_page in claimed_pages:
                 current_page += 1
-                if current_page > total: break
+                if current_page > total:
+                    break
 
             logger.info(f"[{document_id}] Scanning page {current_page}/{total}")
 
@@ -380,115 +388,133 @@ class SectionDetectionAgent:
                 claimed_pages.add(current_page)
                 current_page += 1
                 continue
+
             claimed_pages.add(current_page)
+
             # --- Step 2: process each element found on this page ---
             element_page = current_page
             for elem in elements:
                 if current_page > element_page:
                     break
+
                 page_type = elem.get("page_type", "section_start")
 
-                # ── COVER / TOC / BLANK ───────────────────────
                 if page_type in ("cover_page", "toc_page", "blank_page"):
                     name, stype = type_map[page_type]
-                
                 elif page_type == "section_start":
                     name = elem.get("section_name") or "Unknown Section"
                     stype = elem.get("section_type") or "unhandled_content"
 
                 logger.info(
-                    f"[{document_id}]   Section: '{name}' ({stype})"
+                    f"[{document_id}]   Element: '{name}' ({stype})"
                 )
 
-                # Trace using accumulative window
-                end_page, next_sections, shared_page = self._trace_section(
-                    pages_data, current_page, name, stype,
-                    total, document_id,
-                )
-                if not shared_page:
+                # ── Single-page types: cover and blank ────────────────
+                # A cover/title page is definitionally one page.
+                # A blank page is by definition empty.
+                # Neither needs a boundary check — record immediately
+                # and move on without calling _trace_section.
+                if page_type in _SINGLE_PAGE_TYPES:
+                    end_page = current_page
                     claimed_pages.add(end_page)
-                sections.append({
-                    "section_type": stype,
-                    "section_name": name,
-                    "start_page": current_page,
-                    "end_page": end_page,
-                    "confidence": elem.get("confidence", 0.85),
-                    "_source": "scan",
-                })
+                    sections.append({
+                        "section_type": stype,
+                        "section_name": name,
+                        "start_page": current_page,
+                        "end_page": end_page,
+                        "confidence": elem.get("confidence", 0.90),
+                        "_source": "scan",
+                    })
+                    logger.info(
+                        f"[{document_id}]   Single-page {page_type}: "
+                        f"page {current_page} (no boundary check)"
+                    )
+                    current_page = end_page
 
-                logger.info(
-                    f"[{document_id}]   Pages {current_page}-{end_page}"
-                )
-
-                # --- Post-interruption continuation check ---
-                # If we just finished a TOC/cover/blank and there was
-                # a content section before it, check if the page after
-                # continues that previous section.
-                if (
-                    page_type in ("cover_page", "toc_page", "blank_page")
-                    and last_content_section is not None
-                    and end_page + 1 <= total
-                ):
-                    prev_sec = last_content_section
-                    post_page = end_page + 1
+                # ── Multi-page types: toc and section_start ───────────
+                else:
+                    end_page, next_sections, shared_page = self._trace_section(
+                        pages_data, current_page, name, stype,
+                        total, document_id,
+                    )
+                    if not shared_page:
+                        claimed_pages.add(end_page)
+                    sections.append({
+                        "section_type": stype,
+                        "section_name": name,
+                        "start_page": current_page,
+                        "end_page": end_page,
+                        "confidence": elem.get("confidence", 0.85),
+                        "_source": "scan",
+                    })
 
                     logger.info(
-                        f"[{document_id}]   Checking if page {post_page} "
-                        f"continues '{prev_sec['section_name']}' "
-                        f"after {name}"
+                        f"[{document_id}]   Pages {current_page}-{end_page}"
                     )
 
-                    continues = self._check_post_interruption_continuation(
-                        pages_data,
-                        prev_sec, post_page,
-                        interruption_type=name,
-                        int_start=current_page,
-                        int_end=end_page,
-                    )
+                    # --- Post-interruption continuation check ---
+                    # Only runs when enabled in config.  Checks whether
+                    # the page immediately after a TOC interruption resumes
+                    # a content section that was active before it.
+                    if (
+                        POST_INTERRUPTION_CHECK_ENABLED
+                        and page_type in ("toc_page",)
+                        and last_content_section is not None
+                        and end_page + 1 <= total
+                    ):
+                        prev_sec = last_content_section
+                        post_page = end_page + 1
 
-                    if continues:
                         logger.info(
-                            f"[{document_id}]   YES — resuming "
-                            f"'{prev_sec['section_name']}' "
-                            f"from page {post_page}"
+                            f"[{document_id}]   Checking if page {post_page} "
+                            f"continues '{prev_sec['section_name']}' "
+                            f"after {name}"
                         )
 
-                        # Resume tracing from post_page onward
-                        # (continuation already confirmed, just find
-                        # where this resumed section ends)
-                        resume_end, resume_next, resume_shared = (
-                            self._trace_section(
-                                pages_data, post_page,
-                                prev_sec["section_name"],
-                                prev_sec["section_type"],
-                                total, document_id,
+                        continues = self._check_post_interruption_continuation(
+                            pages_data,
+                            prev_sec, post_page,
+                            interruption_type=name,
+                            int_start=current_page,
+                            int_end=end_page,
+                        )
+
+                        if continues:
+                            logger.info(
+                                f"[{document_id}]   YES — resuming "
+                                f"'{prev_sec['section_name']}' "
+                                f"from page {post_page}"
                             )
-                        )
 
-                        # Extend the previous section's end page
-                        prev_sec["end_page"] = resume_end
-                        for p in range(post_page, resume_end + 1):
-                            claimed_pages.add(p)
+                            resume_end, resume_next, resume_shared = (
+                                self._trace_section(
+                                    pages_data, post_page,
+                                    prev_sec["section_name"],
+                                    prev_sec["section_type"],
+                                    total, document_id,
+                                )
+                            )
 
-                        logger.info(
-                            f"[{document_id}]   Extended "
-                            f"'{prev_sec['section_name']}' to "
-                            f"page {resume_end}"
-                        )
+                            prev_sec["end_page"] = resume_end
+                            for p in range(post_page, resume_end + 1):
+                                claimed_pages.add(p)
 
-                        end_page = resume_end
+                            logger.info(
+                                f"[{document_id}]   Extended "
+                                f"'{prev_sec['section_name']}' to "
+                                f"page {resume_end}"
+                            )
 
-                # Track last content section for post-interruption checks
-                if page_type == "section_start":
-                    last_content_section = sections[-1]
-                elif page_type in ("cover_page", "toc_page"):
-                    # Don't clear on blank — a blank page between
-                    # TOC and continuation shouldn't reset tracking
-                    pass
+                            end_page = resume_end
 
-                current_page = end_page
+                    # Track the last content section for post-interruption
+                    # checks — only section_start elements qualify.
+                    if page_type == "section_start":
+                        last_content_section = sections[-1]
 
-        # Post-process: merge adjacent same-type sections
+                    current_page = end_page
+
+        # Post-process: merge adjacent same-type/name sections, then sort.
         sections.sort(key=lambda s: s["start_page"])
         sections = self._merge_adjacent(sections, document_id)
 
@@ -544,7 +570,7 @@ class SectionDetectionAgent:
         section_type: str,
         total_pages: int,
         document_id: str,
-    ) -> Tuple[int, List[Dict]]:
+    ) -> Tuple[int, List[Dict], bool]:
         """
         Grow window page by page from section_start until the LLM
         detects a semantic/logical break — a different topic starts.
@@ -559,25 +585,19 @@ class SectionDetectionAgent:
         the most recent pages (sliding strategy).
 
         Returns:
-            (end_page, next_sections)
+            (end_page, next_sections, shared_page)
             - end_page: last page belonging to this section
             - next_sections: list of new section dicts discovered on
-              the boundary page (each has section_name, section_type,
-              page_type, _boundary_page). Empty list if section runs
-              to end of document.
-
-        Shared-page handling:
-          Both old content AND new heading on check_page:
-            end_page = check_page, next sections start on check_page
-          Only new heading (no old content) on check_page:
-            end_page = check_page - 1, next sections start on check_page
+              the boundary page. Empty if section runs to end of document.
+            - shared_page: True when the boundary page contains both old
+              content and a new section heading simultaneously.
         """
         current_end = section_start
-        exclude_pages = []
         while current_end < total_pages:
             check_page = current_end + 1
             window_size = check_page - section_start + 1
             logger.info(f"Window size: pages: {section_start} - {check_page}")
+
             # Build the accumulative window
             if window_size <= self.max_window:
                 window = [
@@ -597,10 +617,9 @@ class SectionDetectionAgent:
             )
 
             has_content = result.get("has_current_section_content", True)
-            new_starts = result.get("new_section_starts", False)
+            new_starts  = result.get("new_section_starts", False)
             new_sections = result.get("new_sections", [])
 
-            # Tag each discovered section with the boundary page
             for ns in new_sections:
                 ns["_boundary_page"] = check_page
 
@@ -627,21 +646,19 @@ class SectionDetectionAgent:
                 current_end = check_page
 
             else:
-                # No old content, no new section (e.g. blank page,
-                # appendix divider). Treat as boundary.
+                # No old content, no new section.
                 logger.info(
                     f"[{document_id}]   Page {check_page}: no content, "
                     f"no new section. '{section_name}' ends at "
                     f"{current_end}."
                 )
-                # Return empty list — main loop will re-scan check_page
                 return current_end, [], False
 
         # Reached end of document
         return total_pages, [], False
 
     # ==================================================================
-    # Boundary check — semantic continuation + new section identification
+    # Boundary check
     # ==================================================================
 
     def _check_boundary(
@@ -652,32 +669,20 @@ class SectionDetectionAgent:
         start_page: int,
         check_page: int,
     ) -> Dict:
-        """
-        Send the accumulative window to the LLM and ask about the
-        LAST page:
-          1. Is the content still about the same topic?
-          2. Does a different topic begin? If so, WHAT is it?
-
-        Returns full result dict with:
-          - has_current_section_content: bool
-          - new_section_starts: bool
-          - new_sections: list of {section_name, section_type, page_type}
-          - reason: str
-        """
         images = prepare_images_for_bedrock(window_pages)
-
-        prompt = BOUNDARY_CHECK_PROMPT.format(
-            n_images=len(images),
-            doc_type=get_document_type_name(),
-            section_name=section_name,
-            section_type=section_type,
-            start_page=start_page,
-            check_page=check_page,
-            section_types=", ".join(self.section_definitions.keys()),
-        )
 
         if section_type == "Table of Contents":
             prompt = TOC_BOUNDARY_CHECK_PROMPT.format(
+                n_images=len(images),
+                doc_type=get_document_type_name(),
+                section_name=section_name,
+                section_type=section_type,
+                start_page=start_page,
+                check_page=check_page,
+                section_types=", ".join(self.section_definitions.keys()),
+            )
+        else:
+            prompt = BOUNDARY_CHECK_PROMPT.format(
                 n_images=len(images),
                 doc_type=get_document_type_name(),
                 section_name=section_name,
@@ -725,16 +730,10 @@ class SectionDetectionAgent:
         int_end: int,
     ) -> bool:
         """
-        After a TOC/cover/blank interruption, check if the page right
-        after it continues the section that was active before the
-        interruption.
+        After a TOC interruption, check if the page right after it
+        continues the section that was active before the interruption.
 
-        Shows the LLM two pages:
-          1. The last page of the previous section (origin context)
-          2. The page right after the interruption (check page)
-
-        Returns True if the post-interruption page continues the
-        previous section.
+        Only called when POST_INTERRUPTION_CHECK_ENABLED is True.
         """
         origin_page = prev_section["end_page"]
         window = [
@@ -819,28 +818,75 @@ class SectionDetectionAgent:
         return cur["section_name"] == nxt["section_name"]
 
     # ==================================================================
-    # Full coverage — fill gaps
+    # Full coverage — fill gaps and fix overlaps
     # ==================================================================
 
     def _ensure_full_coverage(
         self, sections: List[Dict], total_pages: int, document_id: str
     ) -> List[Dict]:
         """
-        Fill any gaps between detected sections so every page is covered.
+        Guarantee every page 1..total_pages is covered by exactly one
+        section, with no gaps and no overlaps.
+
+        Fixes applied in order:
+          1. Sort by start_page.
+          2. Resolve any None end_pages before gap/overlap logic runs,
+             so that slice arithmetic in the extractor is always valid.
+          3. For each section, if its start_page overlaps with the
+             previous section's end_page, clamp its start_page forward
+             AND update the section dict so the extractor uses the
+             correct pages.
+          4. Insert gap-fill sections for any uncovered page ranges.
+          5. Extend or append a trailing section to reach total_pages.
         """
         if not sections:
             return sections
 
         sections.sort(key=lambda s: s["start_page"])
+
+        # ── Pass 1: resolve None end_pages ───────────────────────────
+        # A None end_page means the detector reached end-of-document
+        # without finding a closing boundary.  Set it to the next
+        # section's start_page - 1, or total_pages if it is the last.
+        for i, sec in enumerate(sections):
+            if sec["end_page"] is None:
+                if i + 1 < len(sections):
+                    sec["end_page"] = sections[i + 1]["start_page"] - 1
+                else:
+                    sec["end_page"] = total_pages
+                logger.info(
+                    f"[{document_id}] Resolved None end_page for "
+                    f"'{sec['section_name']}' → {sec['end_page']}"
+                )
+
+        # ── Pass 2: fix overlaps and fill gaps ────────────────────────
         filled = []
-        expected = 1
+        expected = 1  # next page we expect to cover
 
         for sec in sections:
             sp = sec["start_page"]
+            ep = sec["end_page"]
 
+            # Clamp overlapping start_page and UPDATE the section dict
+            # so that _extract_sequential slices the correct pages.
             if sp < expected:
+                logger.info(
+                    f"[{document_id}] Overlap: '{sec['section_name']}' "
+                    f"start_page {sp} → clamped to {expected}"
+                )
                 sp = expected
+                sec["start_page"] = sp   # ← fix in the dict itself
 
+            # Skip degenerate sections that have been completely consumed
+            # by the previous section's overlap.
+            if sp > ep:
+                logger.info(
+                    f"[{document_id}] Skipping fully-consumed section "
+                    f"'{sec['section_name']}' (start={sp} > end={ep})"
+                )
+                continue
+
+            # Insert gap-fill for any uncovered pages before this section.
             if sp > expected:
                 gap = {
                     "section_type": "unhandled_content",
@@ -852,22 +898,21 @@ class SectionDetectionAgent:
                 }
                 filled.append(gap)
                 logger.info(
-                    f"[{document_id}] Gap: pp {expected}-{sp - 1}"
+                    f"[{document_id}] Gap filled: pp {expected}-{sp - 1}"
                 )
 
             filled.append(sec)
-            ep = sec["end_page"]
-            expected = (
-                (ep + 1) if ep is not None
-                else sec["start_page"] + 1
-            )
+            expected = ep + 1
 
+        # ── Pass 3: cover any trailing pages ─────────────────────────
         if expected <= total_pages:
-            last = filled[-1]
-            if last["section_type"] in (
-                "back_matter", "unhandled_content"
-            ):
+            last = filled[-1] if filled else None
+            if last and last["section_type"] in ("back_matter", "unhandled_content"):
                 last["end_page"] = total_pages
+                logger.info(
+                    f"[{document_id}] Extended last section "
+                    f"'{last['section_name']}' to page {total_pages}"
+                )
             else:
                 filled.append({
                     "section_type": "back_matter",
@@ -878,8 +923,8 @@ class SectionDetectionAgent:
                     "_source": "trailing_fill",
                 })
                 logger.info(
-                    f"[{document_id}] Trailing: pp {expected}-"
-                    f"{total_pages}"
+                    f"[{document_id}] Trailing fill: "
+                    f"pp {expected}-{total_pages}"
                 )
 
         return filled

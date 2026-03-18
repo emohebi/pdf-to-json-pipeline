@@ -33,7 +33,7 @@
       "max_workers": 5,
       "batch_size": 100,
       "parallel": false,
-      "review": true,
+      "review": false,
       "max_images_per_batch": 20
     },
 
@@ -187,6 +187,10 @@
       "enabled": true,
       "max_snippet_chars": 2000,
       "max_tokens": 4096
+    },
+
+    "detection": {
+      "post_interruption_check": false
     },
 
     "extraction_verification": {
