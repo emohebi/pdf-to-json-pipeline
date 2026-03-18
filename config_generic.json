@@ -163,7 +163,7 @@
     },
 
     "term_matching": {
-      "enabled": true,
+      "enabled": false,
       "terms": ["Rate", "Rate escalation", "Price Adjustment "," amendment", "Fee Escalation "," Fee Revision", "Indexation", "Rise "," fall", "markups" ,"revised rates "," pricing", "Increase "," escalation of charges",
                 "Agreed pricing", "Rate Card "," Service Fee "," Contract Price", "Negotiated rate, Lump sum, fixed price, basis of charge", "Preamble", "Preliminary "," Preparatory statement", "introduction",
                 "Introductory provisions", "Purpose", "Recitals", "Permutation of cost", "Cost variations "," Adjustment" ,"price variation", "Price mechanism", "Pricing scheme "," schedule", "Fee Schedule "," Schedule of rates",
@@ -178,13 +178,13 @@
     },
 
     "effective_date": {
-      "enabled": true,
+      "enabled": false,
       "max_snippet_chars": 2000,
       "max_tokens": 4096
     },
 
     "uom_extraction": {
-      "enabled": true,
+      "enabled": false,
       "max_snippet_chars": 2000,
       "max_tokens": 4096
     },
@@ -194,7 +194,7 @@
     },
 
     "extraction_verification": {
-        "enabled": true,
+        "enabled": false,
 
         "information_field": "description",
         "page_field": "page_number",

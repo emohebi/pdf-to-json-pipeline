@@ -70,9 +70,25 @@ class ValidationAgentDocuPorter:
     ) -> Tuple[Dict, Dict]:
         logger.info(f"[{document_id}] Combining document with {len(section_jsons)} sections")
 
+        # ── Sort by start page before any processing ──────────────────
+        # page_range is [start_page, end_page] set by extract_section.
+        # Sorting here guarantees document order in the final JSON
+        # regardless of any upstream ordering inconsistency.
+        section_jsons = sorted(
+            section_jsons,
+            key=lambda s: s.get("page_range", [0, 0])[0]
+        )
+
+        if logger.isEnabledFor(10):  # DEBUG
+            for s in section_jsons:
+                logger.debug(
+                    f"[{document_id}] Section order: '{s.get('section_name')}' "
+                    f"page_range={s.get('page_range')}"
+                )
+
         document_json = {"document_id": document_id, "document_header": document_header}
 
-        # Populate header sections list
+        # Populate header sections list (in sorted page order)
         section_names = []
         for s in section_jsons:
             name = s.get("section_name", "Unknown")
@@ -84,7 +100,7 @@ class ValidationAgentDocuPorter:
         # in which each type FIRST appears.
         sections_by_type: Dict[str, Any] = {}
         unhandled_content = []
-        type_first_seen_order: List[str] = []  # <-- preserves document order
+        type_first_seen_order: List[str] = []
 
         for section in section_jsons:
             stype = section.get("_metadata", {}).get("section_type", "unhandled_content")
@@ -137,10 +153,6 @@ class ValidationAgentDocuPorter:
                     sections_by_type[stype].append(formatted)
 
         # --- Assemble in DOCUMENT ORDER ---
-        # Use the order in which each section type first appeared in
-        # section_jsons (which follows page order from detection/extraction),
-        # then append any types from assembly_order that weren't seen
-        # (these get empty defaults).
         assembled_types: set = set()
 
         # First: types that appeared in the document, in document order
@@ -155,7 +167,6 @@ class ValidationAgentDocuPorter:
             assembled_types.add("unhandled_content")
 
         # Third: any types from assembly_order that weren't seen
-        # (empty defaults for completeness)
         for stype in self._assembly_order:
             if stype not in assembled_types:
                 document_json[stype] = self._get_empty_section(stype)
@@ -183,19 +194,14 @@ class ValidationAgentDocuPorter:
 
     def _get_empty_section(self, section_type: str) -> Any:
         """Return an empty structure for a section type, based on config."""
-        # Check if this section should be an empty array when children empty
         if section_type in self._empty_array_sections:
             return []
-
-        # Use schema to determine structure
         schema = self._schemas.get(section_type)
         if schema is not None:
             if isinstance(schema, list):
                 return []
             elif isinstance(schema, dict):
                 return {}
-
-        # Fallback based on structure_types
         if section_type in self._object_types:
             return {}
         if section_type in self._array_types:

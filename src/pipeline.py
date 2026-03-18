@@ -269,21 +269,32 @@ def _extract_sequential(
     document_id: str,
 ) -> List[Dict]:
     """
-    Extract sections one at a time, preserving page order.
+    Extract sections one at a time, in ascending page order.
 
-    Sections are processed in the order they appear in `sections`
-    (which is sorted by start_page from the detector).  The resulting
-    list maintains that same page order.
+    Sections are explicitly sorted by start_page here so that the
+    extraction order is guaranteed correct regardless of what the
+    detector returns.  The resulting list is also sorted before
+    returning so validate_and_combine always receives page-ordered input.
     """
-    results = []
-    # Build a clean list of extractable sections first so next_name
-    # lookups are based on extractable neighbours only.
-    extractable = [s for s in sections if not _should_skip_section(s)]
+    # Explicit sort — defence-in-depth, detector should already sort
+    # but this guarantees order at the extraction boundary.
+    sections_sorted = sorted(
+        [s for s in sections if not _should_skip_section(s)],
+        key=lambda s: s["start_page"]
+    )
 
-    for i, section in enumerate(extractable):
+    logger.info(f"[{document_id}] Extraction order:")
+    for s in sections_sorted:
+        logger.info(
+            f"  pp {s['start_page']}-{s['end_page']} "
+            f"[{s['section_type']}] '{s['section_name']}' "
+        )
+
+    results = []
+    for i, section in enumerate(sections_sorted):
         next_name = (
-            extractable[i + 1]["section_name"]
-            if i + 1 < len(extractable) else "END"
+            sections_sorted[i + 1]["section_name"]
+            if i + 1 < len(sections_sorted) else "END"
         )
         schema = get_section_schema(section["section_type"])
         agent = SectionExtractionAgent(schema)
@@ -295,4 +306,6 @@ def _extract_sequential(
         )
         results.append(result)
 
+    # Sort results by start_page as a final safety net
+    results.sort(key=lambda r: r.get("page_range", [0, 0])[0])
     return results
