@@ -92,6 +92,7 @@ def main():
     args = parser.parse_args()
     args.config = None
     args.sections_json = None
+    args.pdf = "./input/Executed - BMA Orica Amending Deed 1 (Counter Signed).pdf"
     # args.sections_json = "./output/20260301_154125/intermediate/detection/Amended_and_Restated_GPSFA_KPMG_Fully_Executed_151221_2_detection.json"
     # args.pages = "1-131"
     # Parse page range

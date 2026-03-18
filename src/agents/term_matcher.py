@@ -170,8 +170,8 @@ class TermMatchingAgent:
         texts: List[str] = []
         self._collect_text(data, texts)
         combined = " ".join(texts)
-        if len(combined) > max_chars:
-            combined = combined[:max_chars] + "..."
+        # if len(combined) > max_chars:
+        #     combined = combined[:max_chars] + "..."
         return combined
 
     def _collect_text(self, data: Any, acc: List[str]) -> None:

@@ -164,13 +164,14 @@
 
     "term_matching": {
       "enabled": true,
-      "terms": ["Rate escalation", "Price Adjustment / amendment", "Fee Escalation / Fee Revision", "Indexation", "Rise / fall", "markups" ,"revised rates / pricing", "Increase / escalation of charges",
-                "Agreed pricing", "Rate Card / Service Fee / Contract Price", "Negotiated rate, Lump sum, fixed price, basis of charge", "Preamble", "Preliminary / Preparatory statement", "introduction",
-                "Introductory provisions", "Purpose", "Recitals", "Permutation of cost", "Cost variations / Adjustment" ,"price variation", "Price mechanism", "Pricing scheme / schedule", "Fee Schedule / Schedule of rates",
-                "Price on ad/hoc basis", "Ad-Hoc pricing", "As-needed / on-request pricing", "case-by-case pricing", "Currency", "AUD", "USD", "dollar amount", "payment denomination", "base / specified currency", "monetary unit",
-                "Mobilise and demobilise", "Commence work", "deploy", "begin delivery", "initiate activities", "Site Works", "Start up activities", "ramp-up", "Cease work / Withdraw / Complete / Close out / Wrap up / removal / termination",
-                "Price components", "Cost components", "price / cost elements", "cost breakdown", "fee components", "The basis on which the charges should be applied",
-                "charging methodology", "fee calculation / model / mechanism", "application of charges", "Any clauses that amend the agreed rates", "Rate variation / amendment /  adjustment clauses", "conditional"],
+      "terms": ["Rate", "Rate escalation", "Price Adjustment "," amendment", "Fee Escalation "," Fee Revision", "Indexation", "Rise "," fall", "markups" ,"revised rates "," pricing", "Increase "," escalation of charges",
+                "Agreed pricing", "Rate Card "," Service Fee "," Contract Price", "Negotiated rate, Lump sum, fixed price, basis of charge", "Preamble", "Preliminary "," Preparatory statement", "introduction",
+                "Introductory provisions", "Purpose", "Recitals", "Permutation of cost", "Cost variations "," Adjustment" ,"price variation", "Price mechanism", "Pricing scheme "," schedule", "Fee Schedule "," Schedule of rates",
+                "Price on ad","hoc basis", "Ad-Hoc pricing", "As-needed "," on-request pricing", "case-by-case pricing", "Currency", "AUD", "USD", "dollar amount", "payment denomination", "base "," specified currency", "monetary unit",
+                "Mobilise and demobilise", "Commence work", "deploy", "begin delivery", "initiate activities", "Site Works", "Start up activities", "ramp-up", "Cease work "," Withdraw "," Complete "," Close out "," Wrap up "," removal "," termination",
+                "Price components", "Cost components", "price "," cost elements", "cost breakdown", "fee components", "The basis on which the charges should be applied",
+                "charging methodology", "fee calculation "," model "," mechanism", "application of charges", "Any clauses that amend the agreed rates", "Rate variation "," amendment ","  adjustment clauses", "conditional"],
+
       "terms_per_batch": 10,
       "max_snippet_chars": 1500,
       "max_tokens": 8192
@@ -188,7 +189,58 @@
       "max_tokens": 4096
     },
 
+    "extraction_verification": {
+        "enabled": true,
+
+        "information_field": "description",
+        "page_field": "page_number",
+
+        "context_pages": 0,
+
+        "max_tokens": 4096,
+        "max_retries": 3
+      },
+
     "prompts": {
+      "extraction_verification":{
+        "template": [
+            "You are a document verification expert.",
+            "",
+            "I am showing you {n_images} page image(s) from a document (page {page_numbers}).",
+            "",
+            "INFORMATION TO VERIFY:",
+            "{information}",
+            "",
+            "TASK:",
+            "Carefully examine the page image(s) and determine whether the information",
+            "above is:",
+            "",
+            "- CORRECT      : The information including effective date, description, unit_price, and currency exactly or substantially matches what is",
+            "                 visible on the page(s). Minor formatting differences are OK.",
+            "- INCORRECT    : The information including effective date, description, unit_price, and currency is present but contains errors (wrong",
+            "                 values, wrong dates, wrong names, wrong amounts, etc.).",
+            "- MISSING      : The information cannot be found on the page(s) at all.",
+            "- UNVERIFIABLE : The page(s) are illegible, the query is too vague, or",
+            "                 you genuinely cannot determine the answer.",
+            "",
+            "RULES:",
+            "1. Read ALL visible text in the image(s) carefully before deciding.",
+            "2. Compare numbers, dates, names, and amounts precisely.",
+            "3. Minor formatting differences (e.g. '01 Jan 2025' vs '1 January 2025')",
+            "   are still CORRECT if the meaning is the same.",
+            "4. If the information is partially correct and partially wrong, return",
+            "   INCORRECT and explain exactly what is wrong.",
+            "5. Keep your reasoning concise (1-3 sentences).",
+            "",
+            "Return ONLY a JSON object:",
+            "{{",
+            "  \"verdict\": \"CORRECT | INCORRECT | MISSING | UNVERIFIABLE\",",
+            "  \"reasoning\": \"<brief explanation>\"",
+            "}}",
+            "",
+            "Return the JSON now:"
+          ]
+      },
       "detection": {
         "template": [
         "I am sending you {n_images} consecutive document page images.",
@@ -469,6 +521,7 @@
           "- If no section is related to a term, return an empty list for that term.",
           "- Use the EXACT section names as provided in the summaries.",
           "- Provide a brief, specific reason for each match.",
+          "- Provide an evidence list, all EXACT source text for each match.",
           "",
           "Return ONLY a JSON object (no markdown, start with {{):",
           "{{",
@@ -476,6 +529,7 @@
           "    \"related_sections\": [",
           "      {{",
           "        \"section_name\": \"<exact section name from above>\",",
+          "        \"evidence_list\": \"[<list of exact text from the source>]\",",          
           "        \"relevance\": \"high | medium | low\",",
           "        \"reason\": \"<brief explanation of why this section relates to the term>\"",
           "      }}",

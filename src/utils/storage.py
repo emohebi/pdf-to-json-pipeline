@@ -9,40 +9,19 @@ logger = setup_logger("storage")
 
 
 def _sanitize_filename(name: str, max_length: int = 80) -> str:
-    """
-    Sanitize a string for use as a filename component.
-
-    Replaces any character that is not alphanumeric, hyphen, underscore,
-    or period with an underscore. Collapses consecutive underscores.
-    """
-    # Replace any non-safe character with underscore
     safe = re.sub(r'[^\w\-.]', '_', name)
-    # Collapse multiple underscores
     safe = re.sub(r'_+', '_', safe)
-    # Strip leading/trailing underscores and dots
     safe = safe.strip('_.')
-    # Truncate to max length
     if len(safe) > max_length:
         safe = safe[:max_length].rstrip('_.')
     return safe or "unnamed"
 
 
 def _make_safe_path(directory: Path, *parts: str, extension: str = ".json") -> Path:
-    """
-    Build a file path from sanitized parts, ensuring the FULL path
-    stays under Windows' MAX_PATH (260 chars).
-
-    Dynamically calculates available filename space based on the
-    actual directory path length.
-    """
     WINDOWS_MAX_PATH = 255
-    # Resolve to get the full absolute directory path
     dir_str = str(directory.resolve())
-    # Available chars for filename = MAX_PATH - dir path - separator - extension
     available = WINDOWS_MAX_PATH - len(dir_str) - 1 - len(extension)
-    # Minimum usable filename length
     available = max(available, 30)
-
     joined = "_".join(_sanitize_filename(p) for p in parts)
     if len(joined) > available:
         joined = joined[:available].rstrip('_.')
@@ -56,7 +35,8 @@ class StorageManager:
         from config.settings import (
             DETECTION_DIR, SECTIONS_DIR, FINAL_DIR,
             INTERMEDIATE_DIR, SAVE_INTERMEDIATES, TERM_MATCHING_DIR,
-            EFFECTIVE_DATE_DIR, UOM_EXTRACTION_DIR, BATCHES_DIR
+            EFFECTIVE_DATE_DIR, UOM_EXTRACTION_DIR, BATCHES_DIR,
+            VERIFICATION_DIR,
         )
         self.detection_dir = DETECTION_DIR
         self.sections_dir = SECTIONS_DIR
@@ -67,6 +47,7 @@ class StorageManager:
         self.term_matching_dir = TERM_MATCHING_DIR
         self.effective_date_dir = EFFECTIVE_DATE_DIR
         self.uom_extraction_dir = UOM_EXTRACTION_DIR
+        self.verification_dir = VERIFICATION_DIR
 
     def save_detection_result(self, document_id: str, sections: Any):
         if not self.save_intermediates or sections is None:
@@ -96,22 +77,25 @@ class StorageManager:
         self._write_json(path, results)
 
     def save_term_matching_result(self, document_id: str, report: Dict):
-        """Save term matching report to the term_matching intermediate dir."""
         path = _make_safe_path(self.term_matching_dir, document_id, "term_matching")
         self._write_json(path, report)
         logger.info(f"Saved term matching report: {path}")
 
     def save_effective_date_result(self, document_id: str, report: Dict):
-        """Save effective date report to the effective_date intermediate dir."""
         path = _make_safe_path(self.effective_date_dir, document_id, "effective_date")
         self._write_json(path, report)
         logger.info(f"Saved effective date report: {path}")
 
     def save_uom_extraction_result(self, document_id: str, report: Dict):
-        """Save UOM extraction report to the uom_extraction intermediate dir."""
         path = _make_safe_path(self.uom_extraction_dir, document_id, "uom_extraction")
         self._write_json(path, report)
         logger.info(f"Saved UOM extraction report: {path}")
+
+    def save_verification_result(self, document_id: str, report: Dict):
+        """Save extraction verification report."""
+        path = _make_safe_path(self.verification_dir, document_id, "verification")
+        self._write_json(path, report)
+        logger.info(f"Saved verification report: {path}")
 
     def save_plain_text(self, document_id: str, text: str):
         if not self.save_intermediates:
@@ -120,7 +104,6 @@ class StorageManager:
         path.write_text(text, encoding="utf-8")
 
     def get_validation_queue(self) -> List[Dict]:
-        """Get all documents pending validation."""
         from config.settings import VALIDATION_QUEUE_DIR
         queue = []
         if VALIDATION_QUEUE_DIR.exists():
