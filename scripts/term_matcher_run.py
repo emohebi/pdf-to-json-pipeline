@@ -138,7 +138,7 @@ def main():
 
     # --- Load the document JSON ---
     
-    args.input = "./output/20260315_203751/final/Orica_-_BMA_Supply_Agreement_-_Final_signed_and_dated.json"
+    args.input = "./output/9100000695 Monadelphous Extension (2 years) + Rate Review Amending Deed Mono Signed & Executed/final/9100000695_Monadelphous_Extension_2_years_Rate_Review_Amending_Deed_Mono_Signed.json"
     input_path = Path(args.input)
     if not input_path.exists():
         print(f"ERROR: Input file not found: {input_path}")

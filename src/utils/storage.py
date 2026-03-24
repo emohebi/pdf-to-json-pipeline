@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from typing import Dict, Any, List
 from src.utils.logger import setup_logger
+from src.utils.json_to_excel import write_excel
 
 logger = setup_logger("storage")
 
@@ -69,6 +70,13 @@ class StorageManager:
         path = _make_safe_path(self.final_dir, document_id)
         self._write_json(path, data)
         logger.info(f"Saved final: {path}")
+        with open(path, encoding="utf-8") as f:
+            document = json.load(f)
+
+        output_path = path.with_suffix(".xlsx")
+
+        excel_path = write_excel(document, output_path)
+        logger.info(f"Saved final excel: {excel_path}")
 
     def save_review_results(self, document_id: str, results: Dict):
         if not self.save_intermediates:
