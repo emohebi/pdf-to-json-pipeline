@@ -81,6 +81,9 @@ class AzureOpenAIProvider(LLMProvider):
                     model=self.deployment, messages=messages,
                     max_completion_tokens=max_tokens, temperature=self.temperature,
                 )
+                finish_reason = response.choices[0].finish_reason
+                if finish_reason == "content_filter":
+                    raise ValueError(f"Azure content filter blocked the response")
                 text = response.choices[0].message.content
                 if text is None:
                     raise ValueError("Azure OpenAI returned empty content")

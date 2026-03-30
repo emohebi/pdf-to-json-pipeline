@@ -106,7 +106,7 @@ def main():
     from config.config_loader import load_config
     from config import settings
     from src.agents.effective_date_extractor import EffectiveDateExtractor
-    args.input = "./output/20260224_234604/final/Amended_and_Restated_GPSFA_KPMG_Fully_Executed_151221_2.json"
+    args.input = "./output/9100000695 Monadelphous Extension (2 years) + Rate Review Amending Deed Mono Signed & Executed/final/9100000695_Monadelphous_Extension_2_years_Rate_Review_Amending_Deed_Mono_Signed.json"
     # --- Load the document JSON ---
     input_path = Path(args.input)
     if not input_path.exists():

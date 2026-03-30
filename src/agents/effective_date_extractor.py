@@ -165,7 +165,7 @@ class EffectiveDateExtractor:
         self._collect_text(data, texts)
         combined = " ".join(texts)
         if len(combined) > max_chars:
-            combined = combined[:max_chars] + "..."
+            combined = combined #[:max_chars] + "..."
         return combined
 
     def _collect_text(self, data: Any, acc: List[str]) -> None:
@@ -175,7 +175,7 @@ class EffectiveDateExtractor:
                 acc.append(stripped)
         elif isinstance(data, dict):
             for key, val in data.items():
-                if key.startswith("_") or key == "image":
+                if key.startswith("_") or key == "image" or key == 'type':
                     continue
                 self._collect_text(val, acc)
         elif isinstance(data, list):

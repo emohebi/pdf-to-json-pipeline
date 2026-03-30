@@ -37,20 +37,47 @@ def validate_section_type(section_type: str) -> bool:
     return section_type in SECTION_DEFINITIONS
 
 def clean_empty_fields(data: Any) -> Any:
+    """Recursively remove empty fields from extracted data."""
     if isinstance(data, dict):
-        has_content = False
         cleaned = {}
+        has_content = False
+
         for k, v in data.items():
             if isinstance(v, str):
-                if v: has_content = True
+                if v:
+                    has_content = True
                 cleaned[k] = v
-            else:
+            elif isinstance(v, list):
                 cv = clean_empty_fields(v)
-                if cv: has_content = True
+                if cv:
+                    has_content = True
                 cleaned[k] = cv
+            elif isinstance(v, dict):
+                cv = clean_empty_fields(v)
+                if cv:
+                    has_content = True
+                cleaned[k] = cv
+            else:
+                cleaned[k] = v
+
+        # For content blocks, keep them if they have type
+        if "type" in data:
+            return cleaned
+
         if not has_content and set(data.keys()).issubset({"text", "image", "orig_text", "orig_image"}):
             return {}
         return cleaned if has_content else {}
+
     elif isinstance(data, list):
-        return [ci for ci in (clean_empty_fields(i) for i in data) if ci]
+        result = []
+        for item in data:
+            ci = clean_empty_fields(item)
+            if ci is not None:
+                # Keep content blocks even if some fields are empty
+                if isinstance(ci, dict) and "type" in ci:
+                    result.append(ci)
+                elif ci:
+                    result.append(ci)
+        return result
+
     return data
