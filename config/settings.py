@@ -37,6 +37,7 @@ LOGS_DIR = OUTPUT_DIR / "logs"
 for d in (OUTPUT_DIR, INTERMEDIATE_DIR, FINAL_DIR, LOGS_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
+CPI_ADJUSTMENT_DIR = INTERMEDIATE_DIR / "cpi_adjustment"
 DETECTION_DIR = INTERMEDIATE_DIR / "detection"
 SECTIONS_DIR = INTERMEDIATE_DIR / "sections"
 VALIDATION_QUEUE_DIR = INTERMEDIATE_DIR / "validation_queue"

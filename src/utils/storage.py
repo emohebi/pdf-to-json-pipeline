@@ -37,7 +37,7 @@ class StorageManager:
             DETECTION_DIR, SECTIONS_DIR, FINAL_DIR,
             INTERMEDIATE_DIR, SAVE_INTERMEDIATES, TERM_MATCHING_DIR,
             EFFECTIVE_DATE_DIR, UOM_EXTRACTION_DIR, BATCHES_DIR,
-            VERIFICATION_DIR,
+            VERIFICATION_DIR, CPI_ADJUSTMENT_DIR
         )
         self.detection_dir = DETECTION_DIR
         self.sections_dir = SECTIONS_DIR
@@ -49,6 +49,12 @@ class StorageManager:
         self.effective_date_dir = EFFECTIVE_DATE_DIR
         self.uom_extraction_dir = UOM_EXTRACTION_DIR
         self.verification_dir = VERIFICATION_DIR
+        self.cpi_adjustment_dir = CPI_ADJUSTMENT_DIR
+
+    def save_cpi_adjustment_result(self, document_id: str, report: Dict):
+        path = _make_safe_path(self.cpi_adjustment_dir, document_id, "cpi_adjustment")
+        self._write_json(path, report)
+        logger.info(f"Saved CPI adjustment report: {path}")
 
     def save_detection_result(self, document_id: str, sections: Any):
         if not self.save_intermediates or sections is None:
