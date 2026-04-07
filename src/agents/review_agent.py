@@ -32,18 +32,25 @@ You are a document extraction quality reviewer.
 
 I am showing you a PDF page image (page {page_number} of {total_pages}).
 
-Below is the text that was EXTRACTED from this page by an automated pipeline.
-Your task is to carefully compare the extracted text against the actual
-page image and assess extraction quality.
+Below is the text that was EXTRACTED by an automated pipeline from the
+section(s) that span this page. The extracted text may include content
+from OTHER pages of the same section — this is expected. Your job is to
+focus ONLY on what is visible on THIS page image.
 
-=== EXTRACTED TEXT FOR THIS PAGE ===
+=== EXTRACTED TEXT (from section(s) covering this page) ===
 {extracted_text}
 === END OF EXTRACTED TEXT ===
 
 TASK:
-1. Read ALL visible text in the page image carefully.
-2. Compare it against the extracted text above.
+1. Read ALL visible text on the page image carefully.
+2. For each piece of visible body content on the page, check whether it
+   appears SOMEWHERE in the extracted text above.
 3. Identify what was correctly captured, what was missed, and what was wrong.
+
+IMPORTANT: The extracted text above may contain content from neighbouring
+pages of the same section. Text that appears in the extraction but is NOT
+visible on THIS page is NOT an error — simply ignore it. Only assess
+content that IS visible on page {page_number}.
 
 === WHAT TO IGNORE (do NOT count as missed or incorrect) ===
 The following page elements should be COMPLETELY IGNORED when assessing
@@ -57,6 +64,7 @@ extraction quality. They are intentionally excluded by the pipeline:
   "COMMERCIAL IN CONFIDENCE", "PRIVATE AND CONFIDENTIAL")
 - Logos, decorative lines, and visual-only elements
 - Copyright notices in footers
+- Extracted text that belongs to OTHER pages (not visible on this page)
 
 Do NOT report any of the above as "missed_content" or "incorrect_content".
 
@@ -72,44 +80,47 @@ should be treated as CORRECT extraction — do NOT report them as errors:
 - Minor formatting: numbered lists "(a)" vs "a)" vs "(a).",
   bullet style "- " vs "* " vs "o "
 - Clause number formatting: "1.1" vs "1.1." vs "1.1 " (trailing dot/space)
+- Word order within a sentence being slightly different due to line wrapping
 
 These are artefacts of the extraction process, not actual errors.
 
 === ASSESSMENT CRITERIA ===
 
 COVERAGE: What percentage of the page's MEANINGFUL BODY content was extracted?
-- Count paragraphs, clauses, table rows, headings, and other body text blocks
-- EXCLUDE all ignored elements listed above (headers, footers, page numbers,
-  confidentiality banners, watermarks)
-- 100% = all meaningful body content was captured
-- 0% = nothing was captured
+- For each paragraph, clause, table row, heading, or text block VISIBLE
+  on page {page_number}, check if it appears in the extracted text above.
+- EXCLUDE all ignored elements (headers, footers, page numbers, banners).
+- 100% = every visible body element on this page was found in the extraction.
+- 0% = nothing visible on this page was found in the extraction.
 
-MISSED CONTENT: List specific BODY text/elements visible on the page but NOT
-in the extracted text. Be specific — quote the first few words of each missed
-item. Do NOT include any ignored elements here.
+MISSED CONTENT: List specific BODY text/elements VISIBLE on page {page_number}
+that do NOT appear anywhere in the extracted text. Be specific — quote
+the first few words of each missed item.
+Do NOT include ignored elements (headers, footers, page numbers, banners).
 
-INCORRECT CONTENT: List any text in the extraction that is factually WRONG
-compared to what is shown on the page. This means:
+INCORRECT CONTENT: List any content where the extraction has WRONG VALUES
+compared to what is shown on page {page_number}:
 - Wrong words (e.g. "shall" extracted as "should")
 - Wrong numbers (e.g. "$500" extracted as "$5000")
-- Genuinely hallucinated text that appears nowhere on the page
-Do NOT list case differences, punctuation differences, or formatting
-differences as errors (see tolerance rules above).
+- Genuinely hallucinated text that appears nowhere on this page AND is
+  not from a neighbouring page of the same section
+Do NOT list case, punctuation, whitespace, or formatting differences.
+Do NOT list text that is from other pages as hallucinated.
 
-TABLE ACCURACY: If the page contains tables:
-- Were all table rows captured?
+TABLE ACCURACY: If page {page_number} contains tables:
+- Were all visible table rows captured in the extraction?
 - Were headers correct?
 - Were cell values accurate?
 
 Return ONLY a JSON object (no markdown fences):
 {{
   "page_number": {page_number},
-  "coverage_pct": <0-100, percentage of meaningful body content extracted>,
-  "total_elements_on_page": <count of distinct body text blocks/paragraphs/rows visible, EXCLUDING headers/footers/page numbers>,
-  "elements_extracted": <count of those that were captured in the extraction>,
-  "elements_missed": <count of those NOT captured>,
-  "has_tables": <true if page contains tables>,
-  "table_accuracy_pct": <0-100 if tables exist, null if no tables>,
+  "coverage_pct": <0-100, percentage of visible body content found in extraction>,
+  "total_elements_on_page": <count of distinct body text blocks/paragraphs/rows VISIBLE on this page, EXCLUDING headers/footers/page numbers>,
+  "elements_extracted": <count of those found in the extracted text>,
+  "elements_missed": <count of those NOT found in the extracted text>,
+  "has_tables": <true if this page contains tables>,
+  "table_accuracy_pct": <0-100 if tables exist on this page, null if no tables>,
   "missed_content": [
     {{
       "type": "paragraph | table_row | heading | list_item | caption | other",
@@ -128,10 +139,10 @@ Return ONLY a JSON object (no markdown fences):
 }}
 
 REMEMBER:
-- Do NOT report page headers, footers, page numbers, or confidentiality
-  banners as missed content.
+- Focus ONLY on content VISIBLE on page {page_number}.
+- Text in the extraction from other pages is NOT an error — ignore it.
+- Do NOT report page headers, footers, page numbers, or banners as missed.
 - Do NOT report case, punctuation, or whitespace differences as errors.
-- Focus ONLY on whether the substantive body content was captured accurately.
 
 Return the JSON now:"""
 
@@ -215,7 +226,7 @@ class ReviewAgent:
 
         # Step 1: Build page-to-text mapping from extracted sections
         page_text_map = self._build_page_text_map(
-            section_jsons, total_pages
+            section_jsons, total_pages, pages_data
         )
 
         logger.info(
@@ -277,16 +288,17 @@ class ReviewAgent:
         self,
         section_jsons: List[Dict],
         total_pages: int,
+        pages_data: List[Dict] = None,
     ) -> Dict[int, str]:
         """
         Build a mapping from page number -> extracted text for that page.
 
-        Uses page_range from section metadata to assign content to pages.
-        For multi-page sections, the content is distributed across pages
-        based on approximate position (since we don't have exact
-        page-level boundaries within a section, we include the full
-        section text for each page in its range — the LLM will sort
-        out what belongs where by looking at the actual page image).
+        For each section, the FULL extracted text is assigned to EVERY
+        page in its page_range. The LLM (which can see the actual page
+        image) determines which parts appear on the page it is reviewing.
+
+        The prompt instructs the LLM to only assess content visible on
+        the page image and to ignore extracted text from other pages.
         """
         page_texts: Dict[int, List[str]] = {
             p: [] for p in range(1, total_pages + 1)
@@ -295,7 +307,16 @@ class ReviewAgent:
         for section in section_jsons:
             name = section.get("section_name", "Unknown")
             page_range = section.get("page_range", [])
+
+            # Handle both section formats:
+            #  1. Pipeline format: {"section_name": ..., "data": {"heading": ..., "content": [...]}}
+            #  2. Flat format:     {"section_name": ..., "heading": ..., "content": [...]}
             data = section.get("data", {})
+            if not isinstance(data, dict) or (
+                not data.get("content") and not data.get("heading")
+                and not data.get("body") and not data.get("text")
+            ):
+                data = section
 
             if not page_range or len(page_range) < 2:
                 continue
@@ -308,34 +329,10 @@ class ReviewAgent:
             if not section_text.strip():
                 continue
 
-            # For sections spanning multiple pages, we split the text
-            # roughly across pages. However, the most reliable approach
-            # is to send the full section text for each page and let
-            # the LLM compare against the image.
-            n_pages = end_page - start_page + 1
-
-            if n_pages == 1:
-                page_texts[start_page].append(section_text)
-            else:
-                # Split text into roughly equal chunks per page
-                lines = section_text.split("\n")
-                lines = [l for l in lines if l.strip()]
-                chunk_size = max(1, len(lines) // n_pages)
-
-                for page_idx in range(n_pages):
-                    page_num = start_page + page_idx
-                    if page_num > total_pages:
-                        break
-
-                    chunk_start = page_idx * chunk_size
-                    if page_idx == n_pages - 1:
-                        # Last page gets the remainder
-                        chunk = lines[chunk_start:]
-                    else:
-                        chunk = lines[chunk_start:chunk_start + chunk_size]
-
-                    if chunk:
-                        page_texts[page_num].append("\n".join(chunk))
+            # Assign the FULL section text to every page in the range.
+            for page_num in range(start_page, end_page + 1):
+                if 1 <= page_num <= total_pages:
+                    page_texts[page_num].append(section_text)
 
         # Combine all text for each page
         return {
@@ -346,89 +343,129 @@ class ReviewAgent:
 
     def _extract_section_text(self, data: Any, section_name: str) -> str:
         """
-        Extract readable text from a section's data.
+        Extract readable text from a section's data dict.
 
-        IMPORTANT: Output only the raw document text — no formatting
-        wrappers, no decorators. The LLM compares this text against
-        the page image, so any added wrappers would be flagged as
-        hallucinated content.
+        Follows the same approach as json_to_excel.py:
+          1. Extract the root heading explicitly from the dict.
+          2. Process the 'content' array where every block has a 'type'.
+
+        No generic dict walking — only known fields are accessed.
+        No added formatting wrappers — raw text only.
         """
         parts: List[str] = []
-        self._walk_content(data, parts, depth=0)
-        return "\n".join(parts)
 
-    def _walk_content(
-        self, data: Any, parts: List[str], depth: int
-    ) -> None:
-        """
-        Recursively walk content blocks and extract text.
+        if isinstance(data, dict):
+            # Root heading
+            heading = data.get("heading", "")
+            if isinstance(heading, str) and heading.strip():
+                parts.append(heading.strip())
 
-        IMPORTANT: Output only the raw document text without any
-        added formatting (no '=== ... ===' wrappers, no '--- ... ---'
-        decorators, no '[Table: ...]' prefixes). The LLM compares
-        this against the page image, so any added wrappers get
-        falsely reported as hallucinated content.
-        """
-        indent = "  " * depth
+            # Main content array (new schema)
+            content = data.get("content", [])
+            if isinstance(content, list) and content:
+                self._flatten_content(content, parts)
 
-        if isinstance(data, str):
-            stripped = data.strip()
-            if stripped:
-                parts.append(f"{indent}{stripped}")
+            # Old schema fallback: body, subsections, tables
+            body = data.get("body", [])
+            if isinstance(body, list) and body:
+                for item in body:
+                    if isinstance(item, str) and item.strip():
+                        parts.append(item.strip())
 
-        elif isinstance(data, dict):
-            btype = data.get("type", "")
+            subsections = data.get("subsections", [])
+            if isinstance(subsections, list) and subsections:
+                for sub in subsections:
+                    if isinstance(sub, dict):
+                        sh = sub.get("heading", "")
+                        if isinstance(sh, str) and sh.strip():
+                            parts.append(sh.strip())
+                        sb = sub.get("body", sub.get("content", []))
+                        if isinstance(sb, list):
+                            self._flatten_content(sb, parts)
 
-            if btype == "paragraph":
-                text = data.get("text", "").strip()
-                if text:
-                    parts.append(f"{indent}{text}")
+            tables = data.get("tables", [])
+            if isinstance(tables, list) and tables:
+                for tbl in tables:
+                    if isinstance(tbl, dict):
+                        self._flatten_table(tbl, parts)
 
-            elif btype == "table":
-                caption = data.get("caption", "")
-                headers = data.get("headers", [])
-                rows = data.get("rows", [])
-
-                if caption:
-                    parts.append(f"{indent}{caption}")
-                if headers:
-                    parts.append(
-                        f"{indent}"
-                        f"{' | '.join(str(h) for h in headers)}"
-                    )
-                for row in rows:
-                    if isinstance(row, list):
-                        parts.append(
-                            f"{indent}"
-                            f"{' | '.join(str(c) for c in row)}"
-                        )
-
-            elif btype == "subsection":
-                heading = data.get("heading", "").strip()
-                if heading:
-                    parts.append(f"{indent}{heading}")
-                inner = data.get("content", [])
-                self._walk_content(inner, parts, depth + 1)
-
-            else:
-                # Generic dict — walk values
-                for key, val in data.items():
-                    if key.startswith("_") or key in (
-                        "image", "type", "page_range"
-                    ):
-                        continue
-                    if key == "heading" and isinstance(val, str) and val.strip():
-                        parts.append(f"{indent}{val.strip()}")
-                    elif key == "content":
-                        self._walk_content(val, parts, depth)
-                    elif key == "text" and isinstance(val, str) and val.strip():
-                        parts.append(f"{indent}{val.strip()}")
-                    else:
-                        self._walk_content(val, parts, depth)
+            # Old unhandled_content schema: {"section": "...", "text": "..."}
+            text = data.get("text", "")
+            if isinstance(text, str) and text.strip():
+                heading_str = heading.strip() if isinstance(heading, str) else ""
+                if text.strip() != heading_str:
+                    parts.append(text.strip())
 
         elif isinstance(data, list):
-            for item in data:
-                self._walk_content(item, parts, depth)
+            # Array-type sections (e.g. unhandled_content)
+            self._flatten_content(data, parts)
+
+        return "\n".join(parts)
+
+    def _flatten_content(self, content: List, parts: List[str]) -> None:
+        """
+        Process a content array — each item is a typed block.
+
+        Mirrors json_to_excel._flatten_content: handles paragraph,
+        table, subsection, and bare strings. Nothing else.
+        """
+        if not isinstance(content, list):
+            return
+
+        for block in content:
+            if not isinstance(block, dict):
+                # Bare string (old schema body arrays)
+                if isinstance(block, str) and block.strip():
+                    parts.append(block.strip())
+                continue
+
+            btype = block.get("type", "")
+
+            if btype == "paragraph":
+                text = block.get("text", "")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+
+            elif btype == "table":
+                self._flatten_table(block, parts)
+
+            elif btype == "subsection":
+                heading = block.get("heading", "")
+                if isinstance(heading, str) and heading.strip():
+                    parts.append(heading.strip())
+                inner = block.get("content", [])
+                if isinstance(inner, list):
+                    self._flatten_content(inner, parts)
+
+            else:
+                # Unknown block type — try to salvage text
+                text = block.get("text", "")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+                # Also check for heading (untyped subsection-like block)
+                heading = block.get("heading", "")
+                if isinstance(heading, str) and heading.strip():
+                    if heading.strip() != (text.strip() if isinstance(text, str) else ""):
+                        parts.append(heading.strip())
+                # Recurse into nested content if present
+                inner = block.get("content", [])
+                if isinstance(inner, list) and inner:
+                    self._flatten_content(inner, parts)
+
+    def _flatten_table(self, table: Dict, parts: List[str]) -> None:
+        """Extract text from a table block."""
+        caption = table.get("caption", "")
+        headers = table.get("headers", [])
+        rows = table.get("rows", [])
+
+        if isinstance(caption, str) and caption.strip():
+            parts.append(caption.strip())
+        if isinstance(headers, list) and headers:
+            parts.append(" | ".join(str(h) for h in headers))
+        if isinstance(rows, list):
+            for row in rows:
+                if isinstance(row, list):
+                    parts.append(" | ".join(str(c) for c in row))
 
     # ==================================================================
     # Per-page review
