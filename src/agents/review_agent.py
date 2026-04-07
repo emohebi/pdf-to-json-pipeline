@@ -92,7 +92,7 @@ class ReviewAgent:
         prefix = "  " * indent
         if isinstance(data, dict):
             for key, value in data.items():
-                if key.startswith("_") or key == "image" or "_orig" in key:
+                if key.startswith("_") or key == "image" or "type" in key:
                     continue
                 if key == "text" and isinstance(value, str) and value.strip():
                     parts.append(f"{prefix}{value}")
