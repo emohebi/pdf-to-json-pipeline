@@ -376,8 +376,8 @@ def main():
         help="Override LLM provider",
     )
     args = parser.parse_args()
-    args.input = r"output\OD-AM-AD_1_HOC_MAINTENANCE_SERVICES_Executed\final\OD-AM-AD_1_HOC_MAINTENANCE_SERVICES_Executed.json"
-    args.pdf = r"input\OD-AM-AD 1 HOC MAINTENANCE SERVICES_Executed.pdf"
+    args.input = r"output\Amendment Deed 5 - Executed Final\final\Amendment_Deed_5_-_Executed_Final.json"
+    args.pdf = r"input\Amendment Deed 5 - Executed Final.pdf"
     # --- Provider override (must happen before config imports) ---
     if args.provider:
         os.environ["LLM_PROVIDER"] = args.provider
