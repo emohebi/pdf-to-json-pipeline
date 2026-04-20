@@ -93,7 +93,7 @@ _detection = _task.get("detection", {})
 POST_INTERRUPTION_CHECK_ENABLED = _detection.get("post_interruption_check", False)
 
 MODEL_TEMPERATURE = _mp.get("temperature", 0)
-MODEL_MAX_TOKENS_DETECTION = _mp.get("max_tokens_detection", 8192)
+MODEL_MAX_TOKENS_DETECTION = _mp.get("max_tokens_detection", 4096)
 MODEL_MAX_TOKENS_EXTRACTION = _mp.get("max_tokens_extraction", 56000)
 MODEL_MAX_TOKENS_VALIDATION = _mp.get("max_tokens_validation", 8192)
 

@@ -437,7 +437,7 @@ class MappingReviewAgent:
                     ],
                     response_format=TableReviewResult,
                     temperature=0.0,
-                    max_completion_tokens=10240,
+                    max_completion_tokens=4096,
                 )
 
                 result = response.choices[0].message.parsed

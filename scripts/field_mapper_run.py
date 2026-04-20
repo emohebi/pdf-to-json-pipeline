@@ -27,11 +27,129 @@ import json
 import os
 import sys
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# ANSI escapes
+BOLD = "\033[1m"
+DIM = "\033[2m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+RED = "\033[31m"
+CYAN = "\033[36m"
+RESET = "\033[0m"
+
+
+class ProgressDisplay:
+    """Fixed-block ANSI display with per-worker progress bars."""
+
+    def __init__(self, num_workers: int, total_files: int):
+        self.num_workers = num_workers
+        self.total = total_files
+        self._worker_lines: list[str] = [
+            f"  {DIM}[w{i + 1}] idle{RESET}" for i in range(num_workers)
+        ]
+        self._ok = 0
+        self._fail = 0
+        self._done = 0
+        self._lock = threading.Lock()
+        self._started = False
+
+    def start(self):
+        with self._lock:
+            if self._started:
+                return
+            self._started = True
+            sys.stdout.write("\n" * (1 + self.num_workers))
+            self._redraw()
+
+    def finish(self):
+        with self._lock:
+            if self._started:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+
+    def mark_started(self, worker_id: int, filename: str):
+        self._update(
+            worker_id,
+            f"  {self._tag(worker_id)} {self._bar(0)}   0% "
+            f"{DIM}Loading{RESET}  {filename}",
+        )
+
+    def mark_mapping(self, worker_id: int, filename: str):
+        self._update(
+            worker_id,
+            f"  {self._tag(worker_id)} {self._bar(40)}  40% "
+            f"{CYAN}Mapping{RESET}  {filename}",
+        )
+
+    def mark_materialising(self, worker_id: int, filename: str):
+        self._update(
+            worker_id,
+            f"  {self._tag(worker_id)} {self._bar(75)}  75% "
+            f"{YELLOW}Materialising{RESET}  {filename}",
+        )
+
+    def mark_ok(self, worker_id: int, filename: str, tables: int, elapsed: float):
+        with self._lock:
+            self._done += 1
+            self._ok += 1
+            self._worker_lines[worker_id - 1] = (
+                f"  {self._tag(worker_id)} {self._bar(100)} "
+                f"{GREEN}OK{RESET} ({tables}t, {elapsed:.1f}s)  {filename}"
+            )
+            if self._started:
+                self._redraw()
+
+    def mark_failed(self, worker_id: int, filename: str, error: str):
+        with self._lock:
+            self._done += 1
+            self._fail += 1
+            short_err = (error[:50] + "...") if len(error) > 50 else error
+            self._worker_lines[worker_id - 1] = (
+                f"  {self._tag(worker_id)} {self._bar(0)} "
+                f"{RED}FAIL{RESET}  {filename}  {DIM}{short_err}{RESET}"
+            )
+            if self._started:
+                self._redraw()
+
+    def mark_idle(self, worker_id: int):
+        self._update(
+            worker_id,
+            f"  {DIM}[w{worker_id}] finished{RESET}",
+        )
+
+    def _tag(self, worker_id: int) -> str:
+        return f"[w{worker_id}|{self._done}/{self.total}]"
+
+    @staticmethod
+    def _bar(pct: int) -> str:
+        filled = pct // 5
+        return "\u2588" * filled + "\u2591" * (20 - filled)
+
+    def _update(self, worker_id: int, text: str):
+        with self._lock:
+            self._worker_lines[worker_id - 1] = text
+            if self._started:
+                self._redraw()
+
+    def _redraw(self):
+        n = 1 + self.num_workers
+        sys.stdout.write(f"\033[{n}A")
+        pct = int(self._done / self.total * 100) if self.total else 100
+        sys.stdout.write(
+            f"\033[2K  {BOLD}Progress: "
+            f"{self._done}/{self.total} ({pct}%){RESET}"
+            f"  {GREEN}{self._ok} ok{RESET}  {RED}{self._fail} failed{RESET}\n"
+        )
+        for line in self._worker_lines:
+            sys.stdout.write(f"\033[2K{line}\n")
+        sys.stdout.flush()
 
 
 def _print_proposal_summary(report: Dict, verbose: bool = True) -> None:
@@ -115,8 +233,8 @@ def main():
     )
     # parser.add_argument(
     #     "--input", "-i", required=True,
-    #     help="Path to a single JSON file or a directory containing "
-    #          "JSON files to process",
+    #     help="Path to a single JSON file, a .txt file list, or a "
+    #          "directory containing *_extracted.json files to process",
     # )
     parser.add_argument(
         "--output", "-o",
@@ -135,15 +253,27 @@ def main():
         "--quiet", "-q", action="store_true",
         help="Print only the final summary, not per-table details",
     )
+    parser.add_argument(
+        '--workers', '-w', type=int, default=1,
+        help='Number of parallel workers for processing files '
+             '(default: 1). Set to 1 to disable parallelism.',
+    )
+    parser.add_argument(
+        '--dyno', action='store_true',
+        help='Use the Dyno Nobel field mapper variant.',
+    )
     args = parser.parse_args()
-    args.input = r"C:\Users\hasssa\OneDrive - BHP\Documents\Code\extract\output\9100075152"
+    args.input = r"C:\Users\hasssa\OneDrive - BHP\Documents\Code\extract\output\9100000695"
     # --- Provider override ---
     if args.provider:
         os.environ["LLM_PROVIDER"] = args.provider
 
     from config.config_loader import load_config
     from config import settings
-    from src.agents.field_mapper import FieldMappingAgent
+    if args.dyno:
+        from src.agents.field_mapper_dyno import FieldMappingAgent
+    else:
+        from src.agents.field_mapper import FieldMappingAgent
 
     # --- Resolve input files ---
     input_path = Path(args.input)
@@ -151,12 +281,25 @@ def main():
         print(f"ERROR: Input path not found: {input_path}")
         sys.exit(1)
 
-    if input_path.is_file():
+    if input_path.is_file() and input_path.suffix == ".txt":
+        # Read file list from a text file (one path per line)
+        json_files = [
+            Path(line.strip()) for line in input_path.read_text().splitlines()
+            if line.strip() and not line.startswith("#")
+        ]
+        missing = [f for f in json_files if not f.exists()]
+        if missing:
+            print(f"WARNING: {len(missing)} file(s) in list not found")
+            json_files = [f for f in json_files if f.exists()]
+        if not json_files:
+            print(f"ERROR: No valid files found in {input_path}")
+            sys.exit(1)
+    elif input_path.is_file():
         json_files = [input_path]
     elif input_path.is_dir():
-        json_files = sorted(input_path.glob("**/*_extracted.json"))
+        json_files = sorted(input_path.rglob("*_extracted.json"))
         if not json_files:
-            print(f"ERROR: No .json files found in {input_path}")
+            print(f"ERROR: No *_extracted.json files found in {input_path}")
             sys.exit(1)
     else:
         print(f"ERROR: {input_path} is not a file or directory")
@@ -165,6 +308,7 @@ def main():
     print(f"Provider: {settings.PROVIDER_NAME}")
     print(f"Input:    {input_path}")
     print(f"Files:    {len(json_files)}")
+    print(f"Workers:  {args.workers}")
     print()
 
     # --- Resolve output directory ---
@@ -187,40 +331,33 @@ def main():
     combined_timesheet_dfs: List = []
     total_start = time.time()
 
-    for fi, json_file in enumerate(json_files, 1):
-        print(f"{'=' * 70}")
-        print(f"FILE {fi}/{len(json_files)}: {json_file.name}")
-        print(f"{'=' * 70}")
-
+    def _process_single_file(json_file: Path) -> Dict:
+        """Process one JSON file: load, map, materialise, save."""
         # Load
         try:
             with open(json_file, encoding="utf-8") as f:
                 document = json.load(f)
         except json.JSONDecodeError as e:
-            print(f"  ERROR: Invalid JSON: {e}")
-            print()
-            all_reports.append({
+            return {
                 "document_id": json_file.stem,
                 "file": str(json_file),
                 "error": f"Invalid JSON: {e}",
                 "tables_found": 0,
                 "tables_mapped": 0,
                 "proposals": [],
-            })
-            continue
+                "_target_dfs": {},
+            }
 
         if not isinstance(document, dict):
-            print(f"  ERROR: Expected JSON object, got {type(document).__name__}")
-            print()
-            all_reports.append({
+            return {
                 "document_id": json_file.stem,
                 "file": str(json_file),
                 "error": "Not a JSON object",
                 "tables_found": 0,
                 "tables_mapped": 0,
                 "proposals": [],
-            })
-            continue
+                "_target_dfs": {},
+            }
 
         document_id = document.get("document_id", json_file.stem)
         file_start = time.time()
@@ -231,9 +368,6 @@ def main():
 
         elapsed = time.time() - file_start
         report["elapsed_seconds"] = round(elapsed, 1)
-
-        # Print summary
-        _print_proposal_summary(report, verbose=not args.quiet)
 
         # Save individual mapping report (JSON)
         if output_dir is not None:
@@ -247,9 +381,8 @@ def main():
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2, ensure_ascii=False)
 
-        print(f"  Mapping report: {out_path}")
-
         # Materialise target tables and write per-file Excel
+        target_dfs = {}
         try:
             import pandas as pd
 
@@ -260,28 +393,175 @@ def main():
             if target_dfs:
                 excel_path = out_path.with_suffix(".xlsx")
                 agent.write_excel(target_dfs, excel_path, document_id)
-                print(f"  Excel output:   {excel_path}")
 
-                for tbl_name, df in target_dfs.items():
-                    print(f"    {tbl_name}: {len(df)} rows, {len(df.columns)} columns")
+        except ImportError:
+            pass
+        except Exception:
+            pass
 
-                # Accumulate for combined output
+        report["_out_path"] = str(out_path)
+        report["_target_dfs"] = target_dfs
+        return report
+
+    # --- Parallel or sequential execution ---
+    effective_workers = min(args.workers, len(json_files))
+
+    if effective_workers > 1 and len(json_files) > 1:
+        display = ProgressDisplay(effective_workers, len(json_files))
+        display.start()
+
+        # Track which worker ID each thread gets
+        _worker_ids: Dict[int, int] = {}  # future_id -> worker_id
+        _next_worker = [1]  # mutable counter
+        _worker_lock = threading.Lock()
+
+        def _get_worker_id() -> int:
+            tid = threading.get_ident()
+            with _worker_lock:
+                if tid not in _worker_ids:
+                    _worker_ids[tid] = _next_worker[0]
+                    _next_worker[0] = (_next_worker[0] % effective_workers) + 1
+                return _worker_ids[tid]
+
+        def _process_with_display(json_file: Path) -> Dict:
+            wid = _get_worker_id()
+            fname = json_file.name
+            display.mark_started(wid, fname)
+
+            # Load
+            try:
+                with open(json_file, encoding="utf-8") as f:
+                    document = json.load(f)
+            except json.JSONDecodeError as e:
+                display.mark_failed(wid, fname, f"Invalid JSON: {e}")
+                return {
+                    "document_id": json_file.stem,
+                    "file": str(json_file),
+                    "error": f"Invalid JSON: {e}",
+                    "tables_found": 0, "tables_mapped": 0,
+                    "proposals": [], "_target_dfs": {},
+                }
+
+            if not isinstance(document, dict):
+                display.mark_failed(wid, fname, "Not a JSON object")
+                return {
+                    "document_id": json_file.stem,
+                    "file": str(json_file),
+                    "error": "Not a JSON object",
+                    "tables_found": 0, "tables_mapped": 0,
+                    "proposals": [], "_target_dfs": {},
+                }
+
+            document_id = document.get("document_id", json_file.stem)
+            file_start = time.time()
+
+            # Map
+            display.mark_mapping(wid, fname)
+            report = agent.map_document(str(json_file), document_id)
+            report["file"] = str(json_file)
+
+            elapsed = time.time() - file_start
+            report["elapsed_seconds"] = round(elapsed, 1)
+
+            # Save mapping report
+            if output_dir is not None:
+                out_path = output_dir / f"{document_id}_field_mapping.json"
+            else:
+                out_path = settings.FINAL_DIR / f"{document_id}_field_mapping.json"
+
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2, ensure_ascii=False)
+
+            # Materialise
+            display.mark_materialising(wid, fname)
+            target_dfs = {}
+            try:
+                import pandas as pd
+                target_dfs = agent.materialise_tables(
+                    document, report, document_id
+                )
+                if target_dfs:
+                    excel_path = out_path.with_suffix(".xlsx")
+                    agent.write_excel(target_dfs, excel_path, document_id)
+            except (ImportError, Exception):
+                pass
+
+            tables_mapped = report.get("tables_mapped", 0)
+            if report.get("error"):
+                display.mark_failed(wid, fname, report["error"])
+            else:
+                display.mark_ok(wid, fname, tables_mapped, elapsed)
+
+            report["_out_path"] = str(out_path)
+            report["_target_dfs"] = target_dfs
+            return report
+
+        with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+            future_to_file = {
+                executor.submit(_process_with_display, jf): jf
+                for jf in json_files
+            }
+            for future in as_completed(future_to_file):
+                jf = future_to_file[future]
+                try:
+                    report = future.result()
+                except Exception as e:
+                    report = {
+                        "document_id": jf.stem,
+                        "file": str(jf),
+                        "error": str(e),
+                        "tables_found": 0,
+                        "tables_mapped": 0,
+                        "proposals": [],
+                        "_target_dfs": {},
+                    }
+
+                # Collect target DataFrames
+                target_dfs = report.pop("_target_dfs", {})
                 if "TblInvoice" in target_dfs:
                     combined_invoice_dfs.append(target_dfs["TblInvoice"])
                 if "TblTimesheets" in target_dfs:
                     combined_timesheet_dfs.append(target_dfs["TblTimesheets"])
-            else:
-                print(f"  Excel output:   (no tables to materialise)")
 
-        except ImportError:
-            print(f"  WARNING: pandas/openpyxl not installed — skipping Excel")
-        except Exception as e:
-            print(f"  WARNING: Excel materialisation failed: {e}")
+                report.pop("_out_path", None)
+                all_reports.append(report)
 
-        print(f"  Time:           {elapsed:.1f}s")
+        display.finish()
         print()
+    else:
+        for fi, json_file in enumerate(json_files, 1):
+            print(f"{'=' * 70}")
+            print(f"FILE {fi}/{len(json_files)}: {json_file.name}")
+            print(f"{'=' * 70}")
 
-        all_reports.append(report)
+            report = _process_single_file(json_file)
+
+            if report.get("error"):
+                print(f"  ERROR: {report['error']}")
+                print()
+
+            # Collect target DataFrames
+            target_dfs = report.pop("_target_dfs", {})
+            if "TblInvoice" in target_dfs:
+                combined_invoice_dfs.append(target_dfs["TblInvoice"])
+            if "TblTimesheets" in target_dfs:
+                combined_timesheet_dfs.append(target_dfs["TblTimesheets"])
+
+            # Print summary
+            _print_proposal_summary(report, verbose=not args.quiet)
+            out_path = report.pop("_out_path", "")
+            if out_path:
+                print(f"  Mapping report: {out_path}")
+
+            if target_dfs:
+                for tbl_name, df in target_dfs.items():
+                    print(f"    {tbl_name}: {len(df)} rows, {len(df.columns)} columns")
+
+            print(f"  Time:           {report.get('elapsed_seconds', 0):.1f}s")
+            print()
+
+            all_reports.append(report)
 
     # --- Combined summary ---
     total_elapsed = time.time() - total_start

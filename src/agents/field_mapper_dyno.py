@@ -130,12 +130,6 @@ TIMESHEET_ENTRY_TARGETS: List[str] = [
     "approved_date",
     "unique_identifier",
     "item_description",
-    "employee_number",
-    "trade",
-    "pay_type",
-    "cost_centre",
-    "task_description",
-    "work_place",
 ]
 
 # Descriptions for each target field — included in the prompt so the LLM
@@ -271,32 +265,6 @@ _TARGET_FIELD_DESCRIPTIONS = {
         "Unique row identifier, employee ID, or reference number. "
         "Common source names: ID, Emp ID, Employee No, Ref, Badge, TS No"
     ),
-    # Optional timesheet fields
-    "employee_number": (
-        "Employee ID, badge number, or personnel number. "
-        "Common source names: Employee Number, Emp No, Personnel No, Badge No, "
-        "Employee No, Emp ID, Staff ID"
-    ),
-    "trade": (
-        "Trade classification or skill category (e.g. Fitter, Boilermaker, Rigger). "
-        "Common source names: Trade, Classification, Skill, Trade Classification"
-    ),
-    "pay_type": (
-        "Pay category or type code (e.g. Normal, OT, TL). "
-        "Common source names: Pay Type, Pay Code, Pay Category, Allowance"
-    ),
-    "cost_centre": (
-        "Cost centre or cost code for billing allocation. "
-        "Common source names: Cost Centre, Cost Code, CC, Cost Center, GL Code"
-    ),
-    "task_description": (
-        "Description of the work task performed (e.g. 'Fixed Plant UG', 'Rail Maintenance'). "
-        "Common source names: Task Description, Task, Work Description, Job Description, Activity"
-    ),
-    "work_place": (
-        "Specific work location within the site (e.g. 'D/S', 'UG', 'Surface'). "
-        "Common source names: Work Place, Workplace, Area, Work Area, Work Location"
-    ),
 }
 
 
@@ -320,45 +288,10 @@ Given a table extracted from a PDF document, you must:
 **TblInvoice** — The table contains invoice LINE ITEMS with some combination of:
   descriptions, quantities, unit prices, amounts/totals, UOM.
   This INCLUDES supply/delivery documents, purchase orders, and credit notes.
-  IMPORTANT: Only tables from section_type "invoice" or "supply_document" should
-  be classified as TblInvoice. Tables from "attachment" sections that contain
-  labour or equipment breakdowns are TblTimesheets (see below).
 
-**TblTimesheets** — The table contains timesheet/labour/equipment entries with some combination of:
+**TblTimesheets** — The table contains timesheet/labour entries with some combination of:
   worker names, dates, hours, shifts (DS/NS), rates, charges, positions/roles.
   IMPORTANT: section_type "other" can contain timesheets — classify by DATA CONTENT, not section_type.
-  This INCLUDES:
-  - Weekly daywork timesheets with day-of-week columns (Mon, Tue, ..., Fri/Sat/Sun)
-  - Individual daily work detail cards (one person, one day, with PM ORDER NUMBER / HOURS columns)
-  - Equipment usage tables in timesheet sections (equipment names/IDs with hours/rates)
-  - Shutdown timesheets with date+shift sub-columns (e.g. "26/10/2024 Dayshift")
-  - labour_charges / equipment_charges tables from "attachment" sections ONLY WHEN they
-    contain individual worker/equipment names per row with day-by-day or per-date hours.
-  CAUTION: If an attachment table has rate-card codes (e.g. "10.10 Coded Welder DS") with
-  aggregated hours and dollar amounts but NO individual worker names and NO per-day columns,
-  it is an invoice billing summary — classify as TblInvoice, NOT TblTimesheets.
-  The key test: do the rows show INDIVIDUAL PEOPLE/EQUIPMENT with daily detail, or do they
-  show BILLING CATEGORIES with total hours and amounts? If billing categories → TblInvoice.
-
-  **MANDATORY TblTimesheets fields** — Every TblTimesheets mapping MUST populate these
-  from either table columns or header keys (whichever is available):
-    - work_date (from header key "date" or a date column or date+shift column names)
-    - staff_equipment_name (from a name/employee column or header key "name")
-    - quantity (from hours/qty column or day-of-week columns)
-    - position_make (from role/position/occupation/classification column or header)
-    - task_description (from task/description column if present)
-    - shift_type (from shift columns, DS/NS indicators, or date+shift column names)
-    - uom (if a unit-of-measure column exists, map it)
-    - approved_date (if an approval/sign-off date exists, map it)
-  If a source for any of these exists in the table or headers, you MUST map it.
-  Do NOT leave them unmapped when the data is available.
-
-  **staff_equipment_name — STRICT RULE:**
-  This field is for human names (e.g. "John Smith") or equipment descriptions
-  (e.g. "20T Franna Crane"). NEVER map rate-card codes like "10.10", "10.50",
-  schedule item numbers, or billing category codes to staff_equipment_name.
-  If the column header says "Employee Name" but the sample data contains codes
-  like "10.10", it is item_description, NOT staff_equipment_name.
 
 **SKIP** — The table should be IGNORED. Skip these:
   - Summary/totals tables (e.g. "Total Ex GST / GST / Total Inc GST" with no line items)
@@ -473,9 +406,8 @@ If a source field matches these, map it to "UNMAPPED" with reasoning "handled by
 ### Transform hints
   - **"parse_currency"** — The value contains currency formatting: "$1,234.56", "A$7,573.50", "$-500.00"
   - **"parse_date"** — The value contains a date in any format: "04.01.2026", "25/02/2025", "Sat 29-11-2025", "W/E 10.10.2025"
-  - **"expand_daywork"** — The column represents a specific day in a daywork timesheet (Mon, Tue, Wed, Thu, Fri, Sat, Sun)
-    OR a composite date+shift column (e.g. "26/10/2024 Dayshift", "Sat 11/01/2025").
-    Each such column contains hours worked. Map to "quantity" with hint "expand_daywork".
+  - **"expand_daywork"** — The column represents a specific day in a daywork timesheet (Mon, Tue, Wed, Thu, Fri, Sat, Sun).
+    Each day column contains hours worked on that day. Map each day column to "quantity" with hint "expand_daywork".
     The pipeline will pivot these into separate rows per day.
   - **"none"** — No special processing needed.
 
@@ -570,140 +502,6 @@ Header keys include: vendor_name, reference_number, po_number, period_from, peri
   ses_type → UNMAPPED — structural metadata ("Create"), not a description
   po_short_description → UNMAPPED — PO reference text, not line description
   claim_submission_date → UNMAPPED — internal submission date, not invoice date
-
-## TIMESHEET FORMAT RULES
-
-These are the timesheet formats you will encounter. Apply the correct mapping approach for each:
-
-### Format A: Shutdown / multi-person weekly timesheet with date+shift sub-columns
-Columns have composite names like "26/10/2024 Dayshift", "26/10/2024 Training", "WEEKLY TOTALS Dayshift".
-- Each date+shift column → quantity (expand_daywork). The date in the column name provides work_date, the shift type (Dayshift/Nightshift/Training/Mob-Demob/Standdown) provides shift_type.
-- "WEEKLY TOTALS *" columns → UNMAPPED (derived totals).
-- INDIVIDUALS NAME / Employee Name → staff_equipment_name
-- ROLE IN SHUTDOWN / Role → position_make
-- EMPLOYMENT GROUP / Employment Company → UNMAPPED
-- SITE ACCESS NUMBER / BHP Access No → unique_identifier
-
-### Format B: Weekly daywork timesheet with day-name columns
-Columns use day names, optionally with dates: "Mon", "Tue", "Sat 11/01/2025", etc.
-- Each day column → quantity (expand_daywork)
-- Total Hours / Total Hrs → UNMAPPED (derived)
-- Employee Name / Name → staff_equipment_name
-- Employee Number → employee_number
-- Trade → trade
-- Pay Type → pay_type
-- Rate $ → rate (parse_currency)
-- Charge $ → charge (parse_currency)
-
-### Format C: Individual daily work detail card (e.g. BHPOD 665)
-A single-person-per-day card with columns like: PM ORDER NUMBER, COST CENTRE, HOURS, TASK DESCRIPTION, WORK PLACE.
-The worker's name, date, and occupation come from header keys (timesheet_header), NOT from table columns.
-- PM ORDER NUMBER → UNMAPPED (reference field)
-- COST CENTRE → cost_centre
-- HOURS → quantity
-- TASK DESCRIPTION → task_description
-- WORK PLACE → work_place
-- TOTAL HOURS (row) → UNMAPPED (derived)
-- Header key "name" → staff_equipment_name
-- Header key "date" → work_date (parse_date)
-- Header key "occupation" → position_make
-- Header key "personnel_no" → employee_number
-- Header key "serial_no" → unique_identifier
-- Header key "supervisor_name" → approved_date → UNMAPPED (it's a name, not a date)
-
-### Format D: Equipment usage table in timesheet sections
-Tables with equipment descriptions, day-of-week columns, and rates/charges.
-Classify as TblTimesheets (NOT SKIP). Equipment description/ID maps to staff_equipment_name.
-- Equipment Description / Equipment Number → staff_equipment_name
-- Day columns → quantity (expand_daywork)
-- Rate $ → rate (parse_currency)
-- Charge $ → charge (parse_currency)
-- Total → UNMAPPED (derived)
-
-### Example 6: Individual daily work detail card
-Columns: ["PM ORDER NUMBER", "COST CENTRE", "HOURS", "TASK DESCRIPTION", "WORK PLACE"]
-Sample: {"PM ORDER NUMBER": "1001589", "COST CENTRE": "", "HOURS": "12", "TASK DESCRIPTION": "Fixed Plant UG", "WORK PLACE": ""}
-Header keys include: date, name, personnel_no, occupation, serial_no, contractor, supervisor_name, pm_order_number_1, company_name, site_name
-→ TblTimesheets
-  PM ORDER NUMBER → UNMAPPED — reference field, same as header key pm_order_number_1
-  COST CENTRE → cost_centre (0.90, none)
-  HOURS → quantity (0.95, none)
-  TASK DESCRIPTION → task_description (0.95, none)
-  WORK PLACE → work_place (0.90, none)
-  date → work_date (0.95, parse_date) — the date this card covers
-  name → staff_equipment_name (0.95, none) — worker's name from header
-  personnel_no → employee_number (0.90, none) — employee ID from header
-  occupation → position_make (0.90, none) — trade/role from header
-  serial_no → unique_identifier (0.85, none) — card serial number
-  contractor → vendor_name (0.85, none) — contracting company
-  supervisor_name → UNMAPPED — name, not a mappable field
-  pm_order_number_1 → UNMAPPED — reference field
-  company_name → UNMAPPED — client company (BHP), not the vendor
-  site_name → location (0.85, none) — work site
-
-### Example 7: Shutdown timesheet with composite date+shift columns
-Columns: ["INDIVIDUALS NAME", "ROLE IN SHUTDOWN", "26/10/2024 Dayshift", "26/10/2024 Nightshift", "27/10/2024 Dayshift", "WEEKLY TOTALS Dayshift", "WEEKLY TOTALS Nightshift"]
-Sample: {"INDIVIDUALS NAME": "Stuart Irrgang", "ROLE IN SHUTDOWN": "Fitter", "26/10/2024 Dayshift": "12", "26/10/2024 Nightshift": "", "27/10/2024 Dayshift": "12", "WEEKLY TOTALS Dayshift": "60", "WEEKLY TOTALS Nightshift": "0"}
-→ TblTimesheets
-  INDIVIDUALS NAME → staff_equipment_name (0.95, none)
-  ROLE IN SHUTDOWN → position_make (0.90, none)
-  26/10/2024 Dayshift → quantity (0.90, expand_daywork) — date=26/10/2024, shift=Dayshift
-  26/10/2024 Nightshift → quantity (0.90, expand_daywork) — date=26/10/2024, shift=Nightshift
-  27/10/2024 Dayshift → quantity (0.90, expand_daywork) — date=27/10/2024, shift=Dayshift
-  WEEKLY TOTALS Dayshift → UNMAPPED — derived weekly total
-  WEEKLY TOTALS Nightshift → UNMAPPED — derived weekly total
-
-### Example 8: Equipment usage in timesheet section
-Columns: ["Equipment Number", "Equipment Description", "Sat 11/01/2025", "Sun 12/01/2025", "Mon 13/01/2025", "Total", "Rate $", "Charge $"]
-Sample: {"Equipment Number": "EQ-001", "Equipment Description": "20T Franna Crane", "Sat 11/01/2025": "", "Sun 12/01/2025": "8", "Mon 13/01/2025": "10", "Total": "18", "Rate $": "$250.00", "Charge $": "$4,500.00"}
-→ TblTimesheets
-  Equipment Number → unique_identifier (0.85, none)
-  Equipment Description → staff_equipment_name (0.90, none) — equipment name goes here
-  Sat 11/01/2025 → quantity (0.90, expand_daywork)
-  Sun 12/01/2025 → quantity (0.90, expand_daywork)
-  Mon 13/01/2025 → quantity (0.90, expand_daywork)
-  Total → UNMAPPED — derived total
-  Rate $ → rate (0.95, parse_currency)
-  Charge $ → charge (0.90, parse_currency)
-
-### Example 9: Labour charges from attachment — billing summary (TblInvoice)
-section_type: "attachment", table_id: "labour_charges"
-Columns: ["Description", "Hours", "Rate Label", "Rate", "Rate Unit", "Amount"]
-Sample: {"Description": "10.10 Coded Welder DS", "Hours": "28.5", "Rate Label": "Hours @ $", "Rate": "$ 112.01", "Rate Unit": "per hour", "Amount": "$ 3,192.29"}
-→ TblInvoice (rows are billing CATEGORIES like "10.10 Coded Welder DS", NOT individual worker names)
-  Description → item_description (0.90, none) — schedule rate code
-  Hours → quantity (0.95, none)
-  Rate Label → UNMAPPED — label text
-  Rate → unit_price (0.95, parse_currency)
-  Rate Unit → uom (0.80, none)
-  Amount → amount (0.95, parse_currency)
-
-### Example 10: Labour charges from attachment — per-worker detail (TblTimesheets)
-section_type: "attachment", table_id: "labour_charges"
-Columns: ["Employee Name", "Position", "Mon", "Tue", "Wed", "Thu", "Fri", "Total Hrs", "Rate", "Charge"]
-Sample: {"Employee Name": "J Smith", "Position": "Boilermaker", "Mon": "10", "Tue": "10", "Wed": "10", "Thu": "10", "Fri": "10", "Total Hrs": "50", "Rate": "$85.50", "Charge": "$4,275.00"}
-→ TblTimesheets (rows are INDIVIDUAL WORKERS with day-by-day hours)
-  Employee Name → staff_equipment_name (0.95, none)
-  Position → position_make (0.90, none)
-  Mon → quantity (0.90, expand_daywork)
-  Tue → quantity (0.90, expand_daywork)
-  Wed → quantity (0.90, expand_daywork)
-  Thu → quantity (0.90, expand_daywork)
-  Fri → quantity (0.90, expand_daywork)
-  Total Hrs → UNMAPPED — derived total
-  Rate → rate (0.95, parse_currency)
-  Charge → charge (0.90, parse_currency)
-
-### Example 11: Equipment charges from attachment — billing summary (TblInvoice)
-section_type: "attachment", table_id: "equipment_charges"
-Columns: ["Description", "Qty", "UOM", "Rate", "Amount"]
-Sample: {"Description": "20T Franna Crane", "Qty": "18", "UOM": "Hrs", "Rate": "$250.00", "Amount": "$4,500.00"}
-→ TblInvoice (aggregated equipment billing line, no per-day breakdown)
-  Description → description (0.90, none) — equipment type billed
-  Qty → quantity (0.95, none)
-  UOM → uom (0.90, none)
-  Rate → unit_price (0.95, parse_currency)
-  Amount → amount (0.90, parse_currency)
 """
 
 # Number of sample rows to include in the prompt
@@ -897,13 +695,12 @@ class FieldMappingAgent:
             return {}
 
         # Rebuild the raw tables keyed by table_id for lookup
-        # Use (table_id, index) to avoid losing tables with duplicate IDs
         all_tables = self._find_all_tables(document)
-        tables_by_id: Dict[str, list] = {}
+        tables_by_id: Dict[str, Dict] = {}
         for t in all_tables:
-            tables_by_id.setdefault(t["table_id"], []).append(t)
+            tables_by_id[t["table_id"]] = t
 
-        # Global header values as fallback
+        # Collect header values from all header locations
         header_values = self._extract_header_values(document)
 
         # Extraction info (contract_number, po_number, etc.)
@@ -922,8 +719,7 @@ class FieldMappingAgent:
 
             source = proposal.get("_source", {})
             table_id = source.get("table_id", "")
-            candidates = tables_by_id.get(table_id, [])
-            raw_table = candidates.pop(0) if candidates else None
+            raw_table = tables_by_id.get(table_id)
 
             if raw_table is None:
                 logger.warning(
@@ -952,45 +748,18 @@ class FieldMappingAgent:
                 else:
                     hdr_mappings[src] = {"target": tgt, "hint": hint}
 
-            # Identify expand_daywork columns (day-of-week columns to pivot)
-            daywork_cols: List[tuple] = []  # (col_index, col_name)
-            regular_cols: Dict[str, Dict] = {}  # non-daywork col mappings
-            for col_name, mapping in col_mappings.items():
-                if mapping["hint"] == "expand_daywork":
-                    ci = headers.index(col_name)
-                    daywork_cols.append((ci, col_name))
-                else:
-                    regular_cols[col_name] = mapping
-
-            if daywork_cols:
-                logger.debug(
-                    f"[{document_id}] Expanding {len(daywork_cols)} "
-                    f"daywork columns from table '{table_id}'"
-                )
-
-            # Pre-compute shared values outside the row loop
-            sec_headers = raw_table.get("_section_headers", {})
-            section_type = source.get("section_type", "")
-            doc_title = sec_headers.get(
-                "document_title",
-                sec_headers.get("invoice_title", ""),
-            )
-            is_draft = "draft" in doc_title.lower() if doc_title else False
-            table_meta = raw_table.get("_table_metadata", {})
-
             # Materialise each data row
             for row in rows:
                 if not isinstance(row, list):
                     continue
 
-                # Build the base output row from non-daywork columns
-                base_row: Dict[str, str] = {}
+                output_row: Dict[str, str] = {}
 
-                # Apply regular (non-daywork) column mappings
+                # Apply column mappings
                 for ci, col_name in enumerate(headers):
                     if ci >= len(row):
                         continue
-                    mapping = regular_cols.get(col_name)
+                    mapping = col_mappings.get(col_name)
                     if mapping is None:
                         continue
 
@@ -998,7 +767,7 @@ class FieldMappingAgent:
                     hint = mapping["hint"]
                     raw_value = str(row[ci]) if row[ci] is not None else ""
 
-                    base_row[target_col] = self._apply_transform(
+                    output_row[target_col] = self._apply_transform(
                         raw_value, hint, target_col
                     )
 
@@ -1006,14 +775,11 @@ class FieldMappingAgent:
                 for hdr_key, mapping in hdr_mappings.items():
                     target_col = mapping["target"]
                     hint = mapping["hint"]
-                    raw_value = str(
-                        sec_headers.get(hdr_key, "")
-                        or header_values.get(hdr_key, "")
-                    )
+                    raw_value = str(header_values.get(hdr_key, ""))
 
                     # Don't overwrite a column-level value with a header value
-                    if target_col not in base_row or not base_row[target_col]:
-                        base_row[target_col] = self._apply_transform(
+                    if target_col not in output_row or not output_row[target_col]:
+                        output_row[target_col] = self._apply_transform(
                             raw_value, hint, target_col
                         )
 
@@ -1023,70 +789,15 @@ class FieldMappingAgent:
                                       "ses_number", "sap_invoice_reference"):
                         val = extraction_info.get(ref_field, "")
                         if val:
-                            base_row[ref_field] = str(val)
-
-                # Flag whether this row comes from an invoice section
-                base_row["primary_invoice_flag"] = (
-                    "1" if section_type.startswith("invoice")
-                    and not is_draft else "0"
-                )
-
-                # Parse metadata.notes for daily card fallback fields
-                if isinstance(table_meta, dict):
-                    notes = table_meta.get("notes", "")
-                    if notes and isinstance(notes, str):
-                        import re as _re
-                        for pat, tgt in (
-                            (r"(?:name|employee)[:\s]+([^\n,;]+)", "employee_name"),
-                            (r"(?:date)[:\s]+([^\n,;]+)", "date"),
-                            (r"(?:occupation|trade|position)[:\s]+([^\n,;]+)", "trade"),
-                        ):
-                            if tgt not in base_row or not base_row[tgt]:
-                                match = _re.search(pat, notes, _re.IGNORECASE)
-                                if match:
-                                    base_row[tgt] = match.group(1).strip()
+                            output_row[ref_field] = str(val)
 
                 # Add source traceability
-                base_row["_source_table"] = table_id
-                base_row["_source_file"] = extraction_info.get(
+                output_row["_source_table"] = table_id
+                output_row["_source_file"] = extraction_info.get(
                     "source_file", ""
                 )
 
-                # ----- Daywork expansion -----
-                if daywork_cols:
-                    for dw_ci, dw_col_name in daywork_cols:
-                        raw_hours = (
-                            str(row[dw_ci]) if dw_ci < len(row)
-                            and row[dw_ci] is not None else ""
-                        )
-                        hours = self._apply_transform(
-                            raw_hours, "expand_daywork", "quantity"
-                        )
-                        # Skip zero / empty day-columns
-                        if not hours:
-                            continue
-                        try:
-                            if float(hours) == 0:
-                                continue
-                        except ValueError:
-                            pass
-
-                        day_row = dict(base_row)
-                        day_row["quantity"] = hours
-
-                        # Parse work_date and shift_type from column name
-                        parsed = self._parse_daywork_column(
-                            dw_col_name, sec_headers
-                        )
-                        if parsed["work_date"]:
-                            day_row["work_date"] = parsed["work_date"]
-                        if parsed["shift_type"] and not day_row.get("shift_type"):
-                            day_row["shift_type"] = parsed["shift_type"]
-
-                        target_rows[target_table].append(day_row)
-                else:
-                    # No daywork columns — emit a single row
-                    target_rows[target_table].append(base_row)
+                target_rows[target_table].append(output_row)
 
         # Build DataFrames
         result = {}
@@ -1103,14 +814,9 @@ class FieldMappingAgent:
                 ref_cols = [
                     "contract_number", "po_number",
                     "ses_number", "sap_invoice_reference",
-                    "primary_invoice_flag",
                 ]
-                # orig columns and confidence scores come right after schema cols
-                desc_cols = [
-                    "orig_description", "description_norm_confidence",
-                    "orig_staff_equipment_name", "staff_equipment_name_norm_confidence",
-                    "orig_task_description", "task_description_norm_confidence",
-                ]
+                # orig_description comes right after schema cols
+                desc_cols = ["orig_description", "description_norm_confidence"]
                 trace_cols = ["_source_table", "_source_file"]
                 ordered = []
                 for c in (
@@ -1132,24 +838,10 @@ class FieldMappingAgent:
 
         # Normalise descriptions via LLM
         if result:
-            # Always ensure orig columns exist even if normalisation fails
+            # Always ensure orig_description exists even if normalisation fails
             for df in result.values():
                 if "description" in df.columns and "orig_description" not in df.columns:
                     df["orig_description"] = df["description"]
-                if "staff_equipment_name" in df.columns and "orig_staff_equipment_name" not in df.columns:
-                    df["orig_staff_equipment_name"] = df["staff_equipment_name"]
-                if "task_description" in df.columns and "orig_task_description" not in df.columns:
-                    df["orig_task_description"] = df["task_description"]
-
-            # Deduplicate staff_equipment_name (OCR variants of same person)
-            try:
-                self._deduplicate_staff_names(result, document_id)
-            except Exception as e:
-                logger.warning(
-                    f"[{document_id}] Staff name dedup "
-                    f"failed (non-fatal): {e}"
-                )
-
             try:
                 self._normalise_descriptions(result, document_id)
             except Exception as e:
@@ -1158,249 +850,7 @@ class FieldMappingAgent:
                     f"failed (non-fatal): {e}"
                 )
 
-            try:
-                self._normalise_uom(result, document_id)
-            except Exception as e:
-                logger.warning(
-                    f"[{document_id}] UOM normalisation "
-                    f"failed (non-fatal): {e}"
-                )
-
-        # Clean up TblTimesheets: drop summary rows and fix rate-code names
-        if "TblTimesheets" in result:
-            df = result["TblTimesheets"]
-            before = len(df)
-
-            # Drop rows where staff_equipment_name is a summary label
-            if "staff_equipment_name" in df.columns:
-                import re as _re
-                _summary = df["staff_equipment_name"].apply(
-                    lambda v: isinstance(v, str)
-                    and v.strip().lower() in (
-                        "total", "totals", "grand total", "sub total",
-                        "subtotal", "sub-total",
-                    )
-                )
-                # Reclassify rate-card codes (e.g. "10.10") as item_description
-                _rate_code = df["staff_equipment_name"].apply(
-                    lambda v: isinstance(v, str)
-                    and bool(_re.fullmatch(r"\d+(\.\d+)?", v.strip()))
-                )
-                if _rate_code.any() and "item_description" in df.columns:
-                    df.loc[_rate_code, "item_description"] = (
-                        df.loc[_rate_code, "staff_equipment_name"]
-                    )
-                    df.loc[_rate_code, "staff_equipment_name"] = None
-                elif _rate_code.any():
-                    df["item_description"] = None
-                    df.loc[_rate_code, "item_description"] = (
-                        df.loc[_rate_code, "staff_equipment_name"]
-                    )
-                    df.loc[_rate_code, "staff_equipment_name"] = None
-
-                df = df[~_summary]
-
-            # Coerce quantity to numeric; non-numeric values become NaN
-            if "quantity" in df.columns:
-                df["quantity"] = pd.to_numeric(
-                    df["quantity"], errors="coerce"
-                )
-
-            if len(df) < before:
-                logger.info(
-                    f"[{document_id}] Cleaned {before - len(df)} "
-                    f"summary/invalid rows from TblTimesheets"
-                )
-            result["TblTimesheets"] = df
-
-        # Drop rows flagged as non-primary invoices (drafts etc.)
-        # Only filter TblInvoice; timesheets don't carry this flag meaningfully.
-        for table_name, df in list(result.items()):
-            if table_name != "TblInvoice":
-                continue
-            if "primary_invoice_flag" in df.columns:
-                before = len(df)
-                df = df[df["primary_invoice_flag"] != "0"]
-                if len(df) < before:
-                    logger.info(
-                        f"[{document_id}] Dropped {before - len(df)} "
-                        f"non-primary rows from {table_name}"
-                    )
-                result[table_name] = df
-
         return result
-
-    # ------------------------------------------------------------------
-    # Staff / equipment name deduplication
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _deduplicate_staff_names(
-        materialised: Dict[str, "pd.DataFrame"],
-        document_id: str = "",
-    ) -> None:
-        """
-        Unify OCR-garbled variants of the same person/equipment name.
-
-        Strategy: fuzzy string matching on unique names.
-        Names sharing the same first token (first name) with
-        SequenceMatcher ratio >= 0.55 are clustered together.
-        The most frequent name in each cluster is chosen as
-        canonical; ties are broken by longest name.
-
-        Employee numbers are NOT used for grouping because OCR
-        frequently garbles digits too (e.g. 4010803 vs 4610803).
-
-        Modifies DataFrames in-place. Original names are already
-        preserved in orig_staff_equipment_name before this runs.
-        """
-        from difflib import SequenceMatcher
-
-        col = "staff_equipment_name"
-        # Minimum ratio when first tokens match exactly
-        FIRST_MATCH_THRESHOLD = 0.55
-
-        for table_name, df in materialised.items():
-            if col not in df.columns:
-                continue
-
-            unique_names = [
-                str(v).strip()
-                for v in df[col].dropna().unique()
-                if str(v).strip()
-            ]
-            if len(unique_names) < 2:
-                continue
-
-            # Build clusters via pairwise similarity
-            clusters: list[list[str]] = []
-            assigned: set = set()
-            for i, name_a in enumerate(unique_names):
-                if name_a in assigned:
-                    continue
-                cluster = [name_a]
-                assigned.add(name_a)
-                tokens_a = name_a.lower().split()
-                first_a = tokens_a[0] if tokens_a else ""
-                if not first_a or len(tokens_a) < 2:
-                    # Single-token names (equipment etc.) — skip
-                    continue
-                for j in range(i + 1, len(unique_names)):
-                    name_b = unique_names[j]
-                    if name_b in assigned:
-                        continue
-                    tokens_b = name_b.lower().split()
-                    first_b = tokens_b[0] if tokens_b else ""
-                    if len(tokens_b) < 2:
-                        continue
-                    # Require matching first token (first name)
-                    if first_a != first_b:
-                        continue
-                    ratio = SequenceMatcher(
-                        None, name_a.lower(), name_b.lower()
-                    ).ratio()
-                    if ratio >= FIRST_MATCH_THRESHOLD:
-                        cluster.append(name_b)
-                        assigned.add(name_b)
-                if len(cluster) > 1:
-                    clusters.append(cluster)
-
-            if not clusters:
-                continue
-
-            # Build replacement map: variant → canonical
-            # Pick most frequent name; break ties with longest
-            fuzzy_map: dict = {}
-            for cluster in clusters:
-                freq: dict = {}
-                for name in cluster:
-                    count = int((df[col] == name).sum())
-                    freq[name] = count
-                max_count = max(freq.values())
-                candidates = [n for n, c in freq.items()
-                              if c == max_count]
-                canonical = max(candidates, key=len)
-                for name in cluster:
-                    if name != canonical:
-                        fuzzy_map[name] = canonical
-
-            if fuzzy_map:
-                changed = 0
-                for idx, row in df.iterrows():
-                    old_name = row.get(col)
-                    if isinstance(old_name, str):
-                        key = old_name.strip()
-                        if key in fuzzy_map:
-                            df.at[idx, col] = fuzzy_map[key]
-                            changed += 1
-                if changed:
-                    logger.info(
-                        f"[{document_id}] {table_name}: unified "
-                        f"{changed} staff names via fuzzy match "
-                        f"({fuzzy_map})"
-                    )
-
-    # ------------------------------------------------------------------
-    # UOM normalisation (deterministic lookup)
-    # ------------------------------------------------------------------
-
-    def _normalise_uom(
-        self,
-        materialised: Dict[str, "pd.DataFrame"],
-        document_id: str = "",
-    ) -> None:
-        """
-        Normalise UOM values using a deterministic lookup table.
-
-        Cleans newlines/whitespace, looks up the lowercased value in
-        config.uom_items.UOM_MAP, and replaces with the canonical code.
-        The original value is preserved in 'orig_uom'.
-
-        Modifies DataFrames in-place.
-        """
-        try:
-            from config.uom_items import UOM_MAP
-        except ImportError:
-            logger.warning(
-                f"[{document_id}] config.uom_items not found "
-                "— skipping UOM normalisation"
-            )
-            return
-
-        changed_total = 0
-        for table_name, df in materialised.items():
-            if "uom" not in df.columns:
-                continue
-
-            # Preserve original
-            if "orig_uom" not in df.columns:
-                df["orig_uom"] = df["uom"]
-
-            def _normalise(val):
-                if not isinstance(val, str):
-                    return val
-                # Clean OCR artefacts: collapse newlines and extra spaces
-                cleaned = " ".join(val.split()).strip()
-                key = cleaned.lower()
-                if key in UOM_MAP:
-                    return UOM_MAP[key]
-                return cleaned  # keep cleaned version if not in map
-
-            df["uom"] = df["uom"].apply(_normalise)
-            changed = (df["uom"] != df["orig_uom"]).sum()
-            changed_total += changed
-
-            if changed:
-                logger.info(
-                    f"[{document_id}] {table_name}: normalised "
-                    f"{changed} UOM values"
-                )
-
-        if changed_total:
-            logger.info(
-                f"[{document_id}] UOM normalisation: "
-                f"{changed_total} values normalised"
-            )
 
     # ------------------------------------------------------------------
     # Description normalisation via LLM
@@ -1440,19 +890,13 @@ class FieldMappingAgent:
             return
 
         # Collect unique non-empty descriptions across all tables
-        # Normalise description, staff_equipment_name, and task_description
-        # (item_description contains rate-card codes, not free-text — skip it)
-        # (timesheets use staff_equipment_name for role/equipment names that
-        # should be normalised against the reference list)
-        desc_columns = ["description", "staff_equipment_name", "task_description"]
         unique_descs: set = set()
         for df in materialised.values():
-            for col in desc_columns:
-                if col in df.columns:
-                    for val in df[col].dropna().unique():
-                        val = str(val).strip()
-                        if val:
-                            unique_descs.add(val)
+            if "description" in df.columns:
+                for val in df["description"].dropna().unique():
+                    val = str(val).strip()
+                    if val:
+                        unique_descs.add(val)
 
         if not unique_descs:
             logger.info(
@@ -1485,49 +929,40 @@ class FieldMappingAgent:
         # Always preserve the original description before any
         # normalisation so orig_description is never empty.
         for df in materialised.values():
-            for col in desc_columns:
-                orig_col = f"orig_{col}"
-                if col in df.columns and orig_col not in df.columns:
-                    df[orig_col] = df[col]
+            if "description" in df.columns:
+                df["orig_description"] = df["description"]
 
         if not mapping:
             # No mapping results — set confidence to None
             for df in materialised.values():
-                for col in desc_columns:
-                    if col in df.columns:
-                        df[f"{col}_norm_confidence"] = None
+                if "description" in df.columns:
+                    df["description_norm_confidence"] = None
             return
 
         # Apply to all DataFrames
         for table_name, df in materialised.items():
-            changed_total = 0
-            for col in desc_columns:
-                if col not in df.columns:
-                    continue
+            if "description" not in df.columns:
+                continue
 
-                orig_col = f"orig_{col}"
-                conf_col = f"{col}_norm_confidence"
+            # Replace descriptions and record confidence
+            df["description"] = df["description"].apply(
+                lambda v: mapping[str(v).strip()][0]
+                if isinstance(v, str) and str(v).strip() in mapping
+                else v
+            )
+            df["description_norm_confidence"] = df["orig_description"].apply(
+                lambda v: mapping[str(v).strip()][1]
+                if isinstance(v, str) and str(v).strip() in mapping
+                else None
+            )
 
-                # Replace descriptions and record confidence
-                df[col] = df[col].apply(
-                    lambda v: mapping[str(v).strip()][0]
-                    if isinstance(v, str) and str(v).strip() in mapping
-                    else v
-                )
-                df[conf_col] = df[orig_col].apply(
-                    lambda v: mapping[str(v).strip()][1]
-                    if isinstance(v, str) and str(v).strip() in mapping
-                    else None
-                )
-
-                changed = (df[col] != df[orig_col]).sum()
-                changed_total += changed
-
-            if changed_total:
-                logger.info(
-                    f"[{document_id}] {table_name}: normalised "
-                    f"{changed_total} description values"
-                )
+            changed = (
+                df["description"] != df["orig_description"]
+            ).sum()
+            logger.info(
+                f"[{document_id}] {table_name}: normalised "
+                f"{changed}/{len(df)} description values"
+            )
 
     def _match_descriptions_via_llm(
         self,
@@ -1601,7 +1036,7 @@ Respond ONLY with a JSON array, no other text."""
                     {"role": "system", "content": system_prompt},
                 ],
                 temperature=0.0,
-                max_completion_tokens=16384,
+                max_completion_tokens=4096,
             )
 
             raw = response.choices[0].message.content.strip()
@@ -1651,122 +1086,6 @@ Respond ONLY with a JSON array, no other text."""
                 f"LLM call failed: {e}"
             )
             return {}
-
-    @staticmethod
-    def _parse_daywork_column(
-        col_name: str,
-        sec_headers: Dict[str, str],
-    ) -> Dict[str, str]:
-        """
-        Extract work_date and shift_type from a daywork column name.
-
-        Supported formats (observed in real data):
-          'Sat 2/11/2024'            - abbrev day + d/m/yyyy
-          'Sat_2/11/2024'            - underscore variant
-          'Saturday 7/12/24'         - full day + d/m/yy
-          'saturday_7_12_24'         - lowercase underscored d_m_yy
-          '12/10/2024 - Day Shift Hours' - date first + shift
-          'Saturday Hours'           - day only (no date)
-          'Sat', 'Mon'               - bare abbreviation
-          'weekly_total_9_08_2025'   - prefixed d_mm_yyyy
-          'Saturday 8/03/25'         - full day + d/mm/yy
-
-        Returns dict with keys 'work_date' (ISO or '') and
-        'shift_type' (e.g. 'Day', 'Night', or '').
-        """
-        from datetime import datetime as _dt
-
-        result: Dict[str, str] = {"work_date": "", "shift_type": ""}
-
-        text = col_name.strip()
-
-        # --- Extract shift_type if present ---
-        shift_match = re.search(
-            r"(Day\s*Shift|Night\s*Shift|Dayshift|Nightshift"
-            r"|Training|Mob-Demob|Standdown)",
-            text, re.IGNORECASE,
-        )
-        if shift_match:
-            raw_shift = shift_match.group(1).strip()
-            if "night" in raw_shift.lower():
-                result["shift_type"] = "Night"
-            elif "day" in raw_shift.lower():
-                result["shift_type"] = "Day"
-            else:
-                result["shift_type"] = raw_shift
-
-        # --- Try to extract a date ---
-
-        # Pattern 1: d/m/yyyy or d/m/yy embedded anywhere
-        m = re.search(r"(\d{1,2})[/](\d{1,2})[/](\d{2,4})", text)
-        if m:
-            d, mo, y = m.group(1), m.group(2), m.group(3)
-            if len(y) == 2:
-                y = "20" + y
-            try:
-                dt = _dt(int(y), int(mo), int(d))
-                result["work_date"] = dt.strftime("%Y-%m-%d")
-                return result
-            except (ValueError, OverflowError):
-                pass
-
-        # Pattern 2: underscored date  d_mm_yy  or  d_m_yy
-        # e.g. 'saturday_7_12_24', 'weekly_total_9_08_2025'
-        m = re.search(r"(\d{1,2})_(\d{1,2})_(\d{2,4})", text)
-        if m:
-            d, mo, y = m.group(1), m.group(2), m.group(3)
-            if len(y) == 2:
-                y = "20" + y
-            try:
-                dt = _dt(int(y), int(mo), int(d))
-                result["work_date"] = dt.strftime("%Y-%m-%d")
-                return result
-            except (ValueError, OverflowError):
-                pass
-
-        # Pattern 3: bare day name with no date — derive from
-        # period_end (week_ending) in section headers
-        _DAY_INDEX = {
-            "mon": 0, "monday": 0,
-            "tue": 1, "tues": 1, "tuesday": 1,
-            "wed": 2, "wednesday": 2,
-            "thu": 3, "thur": 3, "thurs": 3, "thursday": 3,
-            "fri": 4, "friday": 4,
-            "sat": 5, "saturday": 5,
-            "sun": 6, "sunday": 6,
-        }
-        # Strip trailing non-alpha (e.g. "Saturday Hours" -> "Saturday")
-        bare = re.sub(r"[\s_]*(hours|shift).*", "", text, flags=re.IGNORECASE).strip()
-        day_key = bare.lower().rstrip("_")
-        if day_key in _DAY_INDEX:
-            # Try to derive date from period_end / week_ending
-            week_end_str = (
-                sec_headers.get("week_ending", "")
-                or sec_headers.get("period_end", "")
-            )
-            if week_end_str:
-                week_end_str = week_end_str.strip()
-                we_dt = None
-                for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d/%m/%y",
-                            "%d-%m-%Y", "%d.%m.%Y"):
-                    try:
-                        we_dt = _dt.strptime(week_end_str, fmt)
-                        break
-                    except ValueError:
-                        continue
-                if we_dt:
-                    # week_ending is typically Fr or the last day of
-                    # the pay week.  Compute offset from that day.
-                    we_dow = we_dt.weekday()  # Mon=0 … Sun=6
-                    target_dow = _DAY_INDEX[day_key]
-                    from datetime import timedelta
-                    # Go backwards from week-end day to find the target
-                    # day within the same 7-day window
-                    delta = (we_dow - target_dow) % 7
-                    work_dt = we_dt - timedelta(days=delta)
-                    result["work_date"] = work_dt.strftime("%Y-%m-%d")
-
-        return result
 
     @staticmethod
     def _apply_transform(
@@ -2038,7 +1357,7 @@ Respond ONLY with a JSON array, no other text."""
                     ],
                     response_format=MappingProposal,
                     temperature=0.0,
-                    max_completion_tokens=16384,
+                    max_completion_tokens=4096,
                 )
 
                 proposal: MappingProposal = response.choices[0].message.parsed
@@ -2247,8 +1566,8 @@ Respond ONLY with a JSON array, no other text."""
         if not isinstance(sections, list):
             sections = []
 
-        # Extract document-level header keys (shared across all sections)
-        doc_level_keys = self._extract_doc_level_header_keys(document)
+        # Determine header keys once (searches all possible header locations)
+        header_keys = self._extract_header_keys(document)
 
         for sec in sections:
             if not isinstance(sec, dict):
@@ -2258,42 +1577,6 @@ Respond ONLY with a JSON array, no other text."""
                 "section_name", sec.get("heading", "")
             )
             section_type = sec.get("section_type", "other")
-
-            # ── Collect per-section header values ────────────────────
-            sec_headers = {}
-            for sk, sv in sec.items():
-                if sk.endswith("_header") and isinstance(sv, dict):
-                    for k, v in sv.items():
-                        if k in sec_headers:
-                            continue
-                        if k in ("sections", "tables", "failed_tables",
-                                 "detection_summary"):
-                            continue
-                        if isinstance(v, dict):
-                            text = v.get("text", "")
-                            if text:
-                                sec_headers[k] = str(text)
-                        elif isinstance(v, str) and v.strip():
-                            sec_headers[k] = v.strip()
-                        elif v is not None:
-                            sec_headers[k] = str(v)
-
-            # ── Per-section header keys (doc-level + this section) ───
-            _seen_hk = set(doc_level_keys)
-            header_keys = list(doc_level_keys)
-            for k in sec_headers:
-                if k not in _seen_hk:
-                    header_keys.append(k)
-                    _seen_hk.add(k)
-
-            # ── Skip draft invoice sections early (saves LLM calls) ──
-            _doc_title = sec_headers.get("document_title", "")
-            if _doc_title and "draft" in _doc_title.lower():
-                logger.info(
-                    f"Skipping draft section "
-                    f"(document_title={_doc_title!r})"
-                )
-                continue
 
             # ── Format A: sections[].tables[] (pdf_table_extractor) ──
             raw_tables = sec.get("tables", [])
@@ -2305,12 +1588,6 @@ Respond ONLY with a JSON array, no other text."""
                         tbl, section_name, section_type, header_keys
                     )
                     if converted is not None:
-                        converted["_section_headers"] = sec_headers
-                        # Preserve per-table metadata (notes, page info)
-                        tbl_meta = tbl.get("metadata", {})
-                        tbl_ext = tbl.get("extraction_info", {})
-                        converted["_table_metadata"] = tbl_meta
-                        converted["_extraction_info"] = tbl_ext
                         tables.append(converted)
 
             # ── Format B/C: content array with typed blocks ──────────
@@ -2321,14 +1598,10 @@ Respond ONLY with a JSON array, no other text."""
                     content = data.get("content", [])
 
             if isinstance(content, list) and content:
-                pre_count = len(tables)
                 self._collect_tables(
                     content, section_name, section_type,
                     header_keys, tables,
                 )
-                # Attach section headers to newly added tables
-                for t in tables[pre_count:]:
-                    t["_section_headers"] = sec_headers
 
         if tables:
             return tables
@@ -2349,17 +1622,6 @@ Respond ONLY with a JSON array, no other text."""
                     )
                     stype = item.get("section_type", key)
 
-                    # Build section-level headers for Format D items
-                    d_sec_headers: dict[str, str] = {}
-                    for hdr_key in header_keys:
-                        hdr_block = item.get(hdr_key, {})
-                        if isinstance(hdr_block, dict):
-                            for k, v in hdr_block.items():
-                                if k not in d_sec_headers and v not in (
-                                    None, "", "N/A",
-                                ):
-                                    d_sec_headers[k] = str(v)
-
                     # Check for tables[] array
                     raw_tables = item.get("tables", [])
                     if isinstance(raw_tables, list):
@@ -2369,7 +1631,6 @@ Respond ONLY with a JSON array, no other text."""
                                     tbl, name, stype, header_keys
                                 )
                                 if converted is not None:
-                                    converted["_section_headers"] = d_sec_headers
                                     tables.append(converted)
 
                     # Check for content array
@@ -2379,13 +1640,10 @@ Respond ONLY with a JSON array, no other text."""
                         if isinstance(data, dict):
                             content = data.get("content", [])
                     if isinstance(content, list) and content:
-                        pre_count = len(tables)
                         self._collect_tables(
                             content, name, stype,
                             header_keys, tables,
                         )
-                        for t in tables[pre_count:]:
-                            t["_section_headers"] = d_sec_headers
 
         return tables
 
@@ -2524,35 +1782,6 @@ Respond ONLY with a JSON array, no other text."""
                         inner, sub_name, section_type,
                         header_keys, tables,
                     )
-
-    @staticmethod
-    def _extract_doc_level_header_keys(document: Dict) -> List[str]:
-        """Extract header keys from document-level headers only
-        (document_header, extraction_info). Section-level headers
-        are handled per-section in _find_all_tables()."""
-        keys: List[str] = []
-        seen: set = set()
-
-        def _add(d: Dict) -> None:
-            if not isinstance(d, dict):
-                return
-            for k, v in d.items():
-                if k in ("sections", "tables", "failed_tables",
-                         "detection_summary", "extraction_info"):
-                    continue
-                if k in seen:
-                    continue
-                if isinstance(v, dict):
-                    if v.get("text"):
-                        keys.append(k)
-                        seen.add(k)
-                elif isinstance(v, str) and v.strip():
-                    keys.append(k)
-                    seen.add(k)
-
-        _add(document.get("document_header", {}))
-        _add(document.get("extraction_info", {}))
-        return keys
 
     @staticmethod
     def _extract_header_keys(document: Dict) -> List[str]:
