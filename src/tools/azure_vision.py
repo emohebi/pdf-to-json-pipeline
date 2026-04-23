@@ -25,12 +25,12 @@ class AzureOpenAIProvider(LLMProvider):
             raise ImportError("The 'openai' package is required. Install: pip install openai")
         
         # Initialize client
-        from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+        # from azure.identity import DefaultAzureCredential, get_bearer_token_provider
         import httpx
         logging.getLogger("httpx").setLevel(logging.CRITICAL)
-        token_provider = get_bearer_token_provider(
-            DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
-        )
+        # token_provider = get_bearer_token_provider(
+        #     DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
+        # )
         http_client = httpx.Client(verify=False)
         try:
             # self.client = AzureOpenAI(

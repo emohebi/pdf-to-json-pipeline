@@ -903,7 +903,10 @@ class FieldMappingAgent:
         for t in all_tables:
             tables_by_id.setdefault(t["table_id"], []).append(t)
 
-        # Global header values as fallback
+        # Document-level header values ONLY (from extraction_info
+        # and document_header). Section-level headers are attached to
+        # each raw_table under "_section_headers" and take priority.
+        # This prevents values from sibling sections bleeding across.
         header_values = self._extract_header_values(document)
 
         # Extraction info (contract_number, po_number, etc.)
@@ -936,6 +939,21 @@ class FieldMappingAgent:
             headers = raw_table.get("headers", [])
             rows = raw_table.get("rows", [])
 
+            # Build the set of valid target columns for this table type.
+            # Any LLM mapping to a target outside this set is dropped,
+            # preventing timesheet-only fields (e.g. unique_identifier)
+            # from leaking into invoice output and vice versa.
+            if target_table == "TblInvoice":
+                valid_targets = set(
+                    INVOICE_HEADER_TARGETS + INVOICE_LINE_ITEM_TARGETS
+                )
+            elif target_table == "TblTimesheets":
+                valid_targets = set(
+                    TIMESHEET_HEADER_TARGETS + TIMESHEET_ENTRY_TARGETS
+                )
+            else:
+                valid_targets = set()
+
             # Build the source->target mapping lookup
             col_mappings: Dict[str, Dict] = {}  # source_col -> {target, hint}
             hdr_mappings: Dict[str, Dict] = {}  # header_key -> {target, hint}
@@ -945,6 +963,16 @@ class FieldMappingAgent:
                 tgt = m.get("target", "")
                 hint = m.get("transform_hint", "none")
                 if tgt == "UNMAPPED" or not tgt:
+                    continue
+
+                # Reject mappings to fields that don't belong to this
+                # table type. Prevents cross-table field pollution.
+                if tgt not in valid_targets:
+                    logger.warning(
+                        f"[{document_id}] Dropping out-of-scope "
+                        f"mapping '{src}' -> '{tgt}' for "
+                        f"{target_table} (target not in schema)"
+                    )
                     continue
 
                 if src in headers:
@@ -983,6 +1011,17 @@ class FieldMappingAgent:
                 if not isinstance(row, list):
                     continue
 
+                # Skip header-shaped rows: if 50%+ of non-empty cells
+                # match their own column name (case-insensitive), this
+                # is a stray column-header row the upstream extractor
+                # left in data[0]. Pivoting it produces garbage output.
+                if self._looks_like_header_row(row, headers):
+                    logger.debug(
+                        f"[{document_id}] Skipping header-shaped row "
+                        f"in table '{table_id}': {row}"
+                    )
+                    continue
+
                 # Build the base output row from non-daywork columns
                 base_row: Dict[str, str] = {}
 
@@ -1003,13 +1042,35 @@ class FieldMappingAgent:
                     )
 
                 # Apply header key mappings (same value for every row)
+                _TIMESHEET_DATE_FIELDS = {
+                    "approved_date", "period_start", "period_end",
+                    "work_date",
+                }
                 for hdr_key, mapping in hdr_mappings.items():
                     target_col = mapping["target"]
                     hint = mapping["hint"]
+                    in_section = hdr_key in sec_headers
                     raw_value = str(
                         sec_headers.get(hdr_key, "")
                         or header_values.get(hdr_key, "")
                     )
+
+                    # Sanity check: flag when a timesheet date field is
+                    # populated from a document-level header rather than
+                    # the section's own header — this is where stale
+                    # dates can sneak in across sections.
+                    if (
+                        target_table == "TblTimesheets"
+                        and target_col in _TIMESHEET_DATE_FIELDS
+                        and raw_value
+                        and not in_section
+                    ):
+                        logger.warning(
+                            f"[{document_id}] Timesheet date field "
+                            f"'{target_col}' populated from non-section "
+                            f"header '{hdr_key}' = {raw_value!r} "
+                            f"(possible cross-section bleed)"
+                        )
 
                     # Don't overwrite a column-level value with a header value
                     if target_col not in base_row or not base_row[target_col]:
@@ -1087,6 +1148,13 @@ class FieldMappingAgent:
                 else:
                     # No daywork columns — emit a single row
                     target_rows[target_table].append(base_row)
+
+        # Dedupe invoice rows that describe the same billing line
+        # (e.g. labour_details + invoice_line_items overlap).
+        if target_rows.get("TblInvoice"):
+            target_rows["TblInvoice"] = self._dedupe_invoice_rows(
+                target_rows["TblInvoice"], document_id,
+            )
 
         # Build DataFrames
         result = {}
@@ -1170,6 +1238,44 @@ class FieldMappingAgent:
         if "TblTimesheets" in result:
             df = result["TblTimesheets"]
             before = len(df)
+
+            # Drop rows where quantity, rate, and charge are all empty
+            # or zero. These carry no billing/time information.
+            def _is_empty_val(v) -> bool:
+                if v is None:
+                    return True
+                s = str(v).strip()
+                if not s or s.lower() in ("nan", "none", "null"):
+                    return True
+                try:
+                    return float(s) == 0.0
+                except (ValueError, TypeError):
+                    return False
+
+            qty_col = (
+                df["quantity"] if "quantity" in df.columns
+                else pd.Series([None] * len(df))
+            )
+            rate_col = (
+                df["rate"] if "rate" in df.columns
+                else pd.Series([None] * len(df))
+            )
+            charge_col = (
+                df["charge"] if "charge" in df.columns
+                else pd.Series([None] * len(df))
+            )
+            all_empty = (
+                qty_col.apply(_is_empty_val)
+                & rate_col.apply(_is_empty_val)
+                & charge_col.apply(_is_empty_val)
+            )
+            if all_empty.any():
+                dropped = int(all_empty.sum())
+                df = df[~all_empty].reset_index(drop=True)
+                logger.info(
+                    f"[{document_id}] Dropped {dropped} "
+                    f"TblTimesheets rows with empty qty/rate/charge"
+                )
 
             # Drop rows where staff_equipment_name is a summary label
             if "staff_equipment_name" in df.columns:
@@ -1465,6 +1571,23 @@ class FieldMappingAgent:
             f"unique descriptions against {len(DESCRIPTION_ITEMS)} "
             f"reference items"
         )
+
+        # Cheap pre-check: if no description shares any 4+ char
+        # token with any reference item, the LLM will return all
+        # non-matches anyway. Skip the API round trip.
+        if not self._has_reference_overlap(
+            unique_descs, DESCRIPTION_ITEMS,
+        ):
+            logger.info(
+                f"[{document_id}] No token overlap between "
+                f"descriptions and reference items — skipping "
+                f"LLM description normalisation"
+            )
+            for df in materialised.values():
+                for col in desc_columns:
+                    if col in df.columns:
+                        df[f"{col}_norm_confidence"] = None
+            return
 
         # Call LLM to match descriptions
         client = self._get_client()
@@ -1769,6 +1892,113 @@ Respond ONLY with a JSON array, no other text."""
         return result
 
     @staticmethod
+    def _looks_like_header_row(row: list, headers: list) -> bool:
+        """
+        True if a row's values match its column headers.
+
+        Used to detect and skip stray header rows that upstream
+        extractors sometimes leave in data[0]. Comparison is
+        case-insensitive and whitespace-stripped. Returns True when
+        at least 50% of non-empty cells match their column header.
+        """
+        if not row or not headers:
+            return False
+        matches = 0
+        non_empty = 0
+        for ci, cell in enumerate(row):
+            if ci >= len(headers):
+                break
+            cell_str = str(cell).strip() if cell is not None else ""
+            header_str = str(headers[ci]).strip()
+            if not cell_str:
+                continue
+            non_empty += 1
+            if cell_str.lower() == header_str.lower():
+                matches += 1
+        return non_empty > 0 and (matches / non_empty) >= 0.5
+
+    @staticmethod
+    def _dedupe_invoice_rows(
+        rows: list, document_id: str = "",
+    ) -> list:
+        """
+        Remove duplicate TblInvoice rows within the same document.
+
+        Two rows are duplicates when they share the same normalised
+        (description, amount, unit_price, quantity). When duplicates
+        exist, prefer the row with a non-empty item_description
+        (richer data — usually means a rate-card line was matched).
+        """
+        if not rows:
+            return rows
+
+        def _key(row):
+            return (
+                str(row.get("description", "")).strip().lower(),
+                str(row.get("amount", "")).strip(),
+                str(row.get("unit_price", "")).strip(),
+                str(row.get("quantity", "")).strip(),
+            )
+
+        groups: dict = {}
+        key_order: list = []
+        for r in rows:
+            k = _key(r)
+            if k not in groups:
+                groups[k] = []
+                key_order.append(k)
+            groups[k].append(r)
+
+        deduped: list = []
+        for k in key_order:
+            group = groups[k]
+            if len(group) == 1:
+                deduped.append(group[0])
+                continue
+            best = None
+            for r in group:
+                if str(r.get("item_description", "")).strip():
+                    best = r
+                    break
+            if best is None:
+                best = group[0]
+            deduped.append(best)
+            if document_id:
+                logger.info(
+                    f"[{document_id}] Deduped {len(group)} invoice "
+                    f"rows for key {k}"
+                )
+        return deduped
+
+    @staticmethod
+    def _has_reference_overlap(
+        descriptions, reference_items: list,
+        min_token_length: int = 4,
+    ) -> bool:
+        """
+        True if any description shares a token (>= min_token_length
+        characters) with any reference item.
+
+        Used as a cheap pre-filter before calling the LLM for
+        description normalisation. When the sets are disjoint the LLM
+        returns all non-matches anyway — save the API round trip.
+        """
+        def _tokens(s: str) -> set:
+            s = re.sub(r'[^a-z0-9\s]', ' ', str(s).lower())
+            return {t for t in s.split() if len(t) >= min_token_length}
+
+        ref_tokens: set = set()
+        for item in reference_items:
+            ref_tokens.update(_tokens(item))
+        if not ref_tokens:
+            return False
+
+        for desc in descriptions:
+            if _tokens(desc) & ref_tokens:
+                return True
+        return False
+
+    @staticmethod
     def _apply_transform(
         value: str, hint: str, target_field: str = ""
     ) -> str:
@@ -1795,10 +2025,29 @@ Respond ONLY with a JSON array, no other text."""
                 r'^(AUD|USD|EUR|GBP|NZD|CAD|SGD)\s*', '',
                 cleaned,
             )
-            # Remove thousand separators (commas) but keep decimal
-            cleaned = cleaned.replace(',', '')
-            # Remove spaces
-            cleaned = cleaned.replace(' ', '')
+            cleaned = cleaned.replace(' ', '').strip()
+
+            # OCR-safe comma/decimal handling.
+            # If there's no dot and the LAST comma has fewer than 3
+            # digits after it, the OCR produced e.g. "2,585,00" where
+            # the last comma is actually the decimal point. Treat
+            # that comma as a decimal; strip earlier commas as
+            # thousand separators. Otherwise treat all commas as
+            # thousand separators.
+            if '.' not in cleaned and ',' in cleaned:
+                last_comma = cleaned.rfind(',')
+                tail = cleaned[last_comma + 1:]
+                tail_digits = re.sub(r'[^\d]', '', tail)
+                if 0 < len(tail_digits) < 3:
+                    cleaned = (
+                        cleaned[:last_comma].replace(',', '')
+                        + '.' + tail
+                    )
+                else:
+                    cleaned = cleaned.replace(',', '')
+            else:
+                cleaned = cleaned.replace(',', '')
+
             # Keep only digits, dot, minus
             cleaned = re.sub(r'[^\d.\-]', '', cleaned)
             return cleaned if cleaned else value
@@ -1862,7 +2111,13 @@ Respond ONLY with a JSON array, no other text."""
     @staticmethod
     def _extract_header_values(document: Dict) -> Dict[str, str]:
         """
-        Extract ALL header key-value pairs from all header locations.
+        Extract header key-value pairs from ONLY document-level sources.
+
+        Specifically: document_header and extraction_info. Section-level
+        headers are NOT included here — they should only be used within
+        their own section (via raw_table["_section_headers"]), to
+        prevent values from one section leaking into tables of another.
+
         Returns a flat dict of {key: value_string}.
         """
         values: Dict[str, str] = {}
@@ -1885,19 +2140,8 @@ Respond ONLY with a JSON array, no other text."""
                 elif v is not None:
                     values[k] = str(v)
 
-        # document_header
         _add_from_dict(document.get("document_header", {}))
-        # extraction_info
         _add_from_dict(document.get("extraction_info", {}))
-        # Section-level headers
-        sections = document.get("sections", [])
-        if isinstance(sections, list):
-            for sec in sections:
-                if isinstance(sec, dict):
-                    for sk, sv in sec.items():
-                        if sk.endswith("_header") and isinstance(sv, dict):
-                            _add_from_dict(sv)
-
         return values
 
     # ------------------------------------------------------------------
@@ -2421,6 +2665,17 @@ Respond ONLY with a JSON array, no other text."""
         data_rows = tbl.get("data", [])
         title = tbl.get("title", "")
 
+        # Skip tables explicitly marked as draft in their title.
+        # e.g. title="INVOICE DRAFT - (no title)" — these are the
+        # pipeline's preview of what will be invoiced, NOT the real
+        # invoice, and including them creates duplicate/wrong rows.
+        if title and "draft" in title.lower():
+            logger.info(
+                f"Skipping draft table '{table_id}' in "
+                f"'{section_name}' (title={title!r})"
+            )
+            return None
+
         # Extract column names
         if isinstance(columns, list) and columns:
             headers = []
@@ -2437,6 +2692,15 @@ Respond ONLY with a JSON array, no other text."""
         if isinstance(data_rows, list):
             for dr in data_rows:
                 if not isinstance(dr, dict):
+                    continue
+                # Skip non-data rows (total, subtotal, header, etc.).
+                # Only rows with row_type='data' represent real billable
+                # line items; totals and subtotals are summary aggregates
+                # the upstream extractor already broke out for us.
+                # If row_type is missing entirely, keep the row (legacy
+                # extractor format).
+                _row_type = dr.get("row_type")
+                if _row_type is not None and _row_type != "data":
                     continue
                 values = dr.get("values", {})
                 if isinstance(values, dict) and headers:
@@ -2493,6 +2757,14 @@ Respond ONLY with a JSON array, no other text."""
                 headers = block.get("headers", [])
                 rows = block.get("rows", [])
                 caption = block.get("caption", "")
+
+                # Skip tables explicitly marked as draft in their caption.
+                if caption and "draft" in caption.lower():
+                    logger.info(
+                        f"Skipping draft table in '{section_name}' "
+                        f"(caption={caption!r})"
+                    )
+                    continue
 
                 table_id = caption if caption else f"{section_name}_table"
                 table_id = re.sub(r'[^\w\-]', '_', table_id)[:60]

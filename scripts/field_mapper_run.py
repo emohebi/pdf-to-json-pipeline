@@ -264,6 +264,7 @@ def main():
     )
     args = parser.parse_args()
     args.input = r"C:\Users\hasssa\OneDrive - BHP\Documents\Code\extract\output\9100000695"
+    args.dyno = False
     # --- Provider override ---
     if args.provider:
         os.environ["LLM_PROVIDER"] = args.provider
